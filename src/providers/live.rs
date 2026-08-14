@@ -523,7 +523,12 @@ fn parse_reset_time(value: Option<&Value>) -> Option<String> {
         }
         _ => return None,
     };
-    Some(date.format("%b %-d at %-I:%M%P").to_string())
+    let now_date = Local::now().date_naive();
+    if date.date_naive() == now_date {
+        Some(date.format("%-I:%M%P").to_string())
+    } else {
+        Some(date.format("%b %-d %-I:%M%P").to_string())
+    }
 }
 
 fn collect_quotas(value: &Value, label: &str, out: &mut Vec<(String, f32, Option<String>)>) {
