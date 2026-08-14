@@ -1,0 +1,5 @@
+/target
+*.wav
+*.log
+audio_*
+.DS_Store
