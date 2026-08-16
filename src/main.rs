@@ -1,6 +1,7 @@
 //! Headroom: macOS Menu Bar AI Subscription Usage Tracker in Rust + GPUI.
 
 mod app_state;
+mod autostart;
 mod credentials;
 mod model;
 mod providers;
@@ -21,10 +22,14 @@ fn main() {
 
     // Help / Version flags
     if args.iter().any(|a| a == "-h" || a == "--help") {
-        println!("Headroom v0.2.0 — macOS Menu Bar AI Subscription Usage Tracker");
+        println!("Headroom v0.3.0 — macOS Menu Bar AI Subscription Usage Tracker");
         println!();
         println!("USAGE:");
-        println!("    headroom [FLAGS]");
+        println!("    headroom [FLAGS] [COMMAND]");
+        println!();
+        println!("COMMANDS:");
+        println!("    enable           Register Headroom to start automatically at login");
+        println!("    disable          Unregister Headroom from starting at login");
         println!();
         println!("FLAGS:");
         println!("    -d, --detach     Run Headroom in the background (daemonize)");
@@ -34,8 +39,39 @@ fn main() {
     }
 
     if args.iter().any(|a| a == "-v" || a == "--version") {
-        println!("headroom 0.2.0");
+        println!("headroom 0.3.0");
         return;
+    }
+
+    // Enable command
+    if args
+        .iter()
+        .any(|a| a == "enable" || a == "--enable" || a == "autostart")
+    {
+        match autostart::enable() {
+            Ok(_) => {
+                println!("Headroom enabled to start automatically at login.");
+                return;
+            }
+            Err(err) => {
+                eprintln!("Failed to enable auto-start at login: {err}");
+                std::process::exit(1);
+            }
+        }
+    }
+
+    // Disable command
+    if args.iter().any(|a| a == "disable" || a == "--disable") {
+        match autostart::disable() {
+            Ok(_) => {
+                println!("Headroom disabled from starting automatically at login.");
+                return;
+            }
+            Err(err) => {
+                eprintln!("Failed to disable auto-start at login: {err}");
+                std::process::exit(1);
+            }
+        }
     }
 
     // Detach flag (-d / --detach / --daemon)

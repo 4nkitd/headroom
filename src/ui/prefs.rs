@@ -98,7 +98,9 @@ fn body(
         let entity = entity.clone();
         cx.listener(move |_, _, _, cx| {
             entity.update(cx, |state, cx| {
-                state.prefs.launch_at_login = !state.prefs.launch_at_login;
+                let target_state = !state.prefs.launch_at_login;
+                let _ = crate::autostart::set_enabled(target_state);
+                state.prefs.launch_at_login = crate::autostart::is_enabled();
                 cx.notify();
             });
         })
