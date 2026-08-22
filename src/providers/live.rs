@@ -1,4 +1,5 @@
-use std::process::{Command, Stdio};
+use std::collections::HashMap;
+use std::process::Command;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, anyhow, bail};
@@ -14,6 +15,9 @@ const GO_USAGE_URLS: &[&str] = &[
     "https://opencode.ai/zen/go/v1/usage",
 ];
 const GOOGLE_TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
+const CLAUDE_OAUTH_TOKEN_URL: &str = "https://claude.ai/v1/oauth/token";
+const CLAUDE_MESSAGES_URL: &str = "https://api.anthropic.com/v1/messages";
+const CLAUDE_OAUTH_CLIENT_ID: &str = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
 fn antigravity_client_id() -> String {
     [
         "1071006060591",
@@ -106,6 +110,64 @@ fn curl_request(
     Ok((status, body.to_string()))
 }
 
+fn curl_request_with_response_headers(
+    url: &str,
+    headers: &[(&str, String)],
+    body: Option<String>,
+) -> Result<(u16, HashMap<String, String>, String)> {
+    let mut command = Command::new("curl");
+    command.args([
+        "--include",
+        "--silent",
+        "--show-error",
+        "--location",
+        "--connect-timeout",
+        "10",
+        "--max-time",
+        "20",
+        "--write-out",
+        "\n__HEADROOM_STATUS__%{http_code}",
+        url,
+    ]);
+    for (name, value) in headers {
+        command.args(["--header", &format!("{name}: {value}")]);
+    }
+    if let Some(body) = body {
+        command.args(["--request", "POST", "--data", &body]);
+    }
+    let output = command.output().context("curl is unavailable")?;
+    if !output.status.success() {
+        return Err(anyhow!(
+            "request failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    let text = String::from_utf8(output.stdout).context("response was not UTF-8")?;
+    let (head_and_body, status_str) = text
+        .rsplit_once("\n__HEADROOM_STATUS__")
+        .ok_or_else(|| anyhow!("response status was missing"))?;
+    let status = status_str
+        .parse::<u16>()
+        .context("response status was invalid")?;
+
+    let (headers_part, body_part) = if let Some((h, b)) = head_and_body.split_once("\r\n\r\n") {
+        (h, b)
+    } else if let Some((h, b)) = head_and_body.split_once("\n\n") {
+        (h, b)
+    } else {
+        (head_and_body, "")
+    };
+
+    let mut response_headers = HashMap::new();
+    for line in headers_part.lines() {
+        if let Some((name, val)) = line.split_once(':') {
+            response_headers.insert(name.trim().to_lowercase(), val.trim().to_string());
+        }
+    }
+
+    Ok((status, response_headers, body_part.to_string()))
+}
+
 fn json_request(url: &str, headers: &[(&str, String)], body: Value) -> Result<Value> {
     let (status, text) = curl_request(url, headers, Some(body.to_string()))?;
     if !(200..300).contains(&status) {
@@ -190,45 +252,245 @@ impl UsageSource for ClaudeCode {
     }
 
     fn fetch(&self) -> Result<Provider> {
-        let output = Command::new(resolve_command("claude")?)
-            .arg("/usage")
-            .stdin(Stdio::null())
-            .output()
-            .context("could not run Claude Code")?;
-        if !output.status.success() {
-            bail!("Claude Code /usage failed");
-        }
-        let text = strip_ansi(&String::from_utf8_lossy(&output.stdout));
-        let session = parse_claude_window(&text, "current session")
-            .ok_or_else(|| anyhow!("Claude usage did not include a session window"))?;
-        let weekly = parse_claude_window(&text, "current week (all models)");
-        let used = 100.0 - session.0;
-        Ok(Provider {
-            id: "claude-code".into(),
-            name: "Claude Code".into(),
-            badge: "C".into(),
-            badge_bg: 0xd97757,
-            badge_fg: 0x2b1206,
-            plan: "Subscription".into(),
-            console_url: "https://claude.ai/settings/usage".into(),
-            limits: [
-                Some(Limit::new(Cadence::Session, session.0).resets_at(session.1)),
-                weekly.map(|window| Limit::new(Cadence::Weekly, window.0).resets_at(window.1)),
-            ]
-            .into_iter()
-            .flatten()
-            .collect(),
-            burn: Burn::new(
-                vec![used * 0.55 / 100.0, used * 0.75 / 100.0, used / 100.0],
-                "live Claude Code usage",
-                if session.0 < 20.0 {
-                    Trend::Rising
-                } else {
-                    Trend::Steady
-                },
-            ),
-        })
+        fetch_claude_http_usage()
     }
+}
+
+struct ClaudeCreds {
+    access_token: String,
+    refresh_token: String,
+    expires_at: i64,
+}
+
+fn read_claude_credentials() -> Result<ClaudeCreds> {
+    let output = Command::new("security")
+        .args([
+            "find-generic-password",
+            "-s",
+            "Claude Code-credentials",
+            "-w",
+        ])
+        .output()
+        .context("could not read Keychain")?;
+    if !output.status.success() {
+        bail!("Claude Code credentials not found in Keychain");
+    }
+    let raw = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let value: Value = serde_json::from_str(&raw).context("invalid Keychain JSON")?;
+    let oauth = value.get("claudeAiOauth").unwrap_or(&value);
+    let access = oauth
+        .get("accessToken")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    let refresh = oauth
+        .get("refreshToken")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    let expires = oauth.get("expiresAt").and_then(Value::as_i64).unwrap_or(0);
+    if access.is_empty() && refresh.is_empty() {
+        bail!("missing Claude tokens");
+    }
+    Ok(ClaudeCreds {
+        access_token: access,
+        refresh_token: refresh,
+        expires_at: expires,
+    })
+}
+
+fn refresh_claude_token(refresh_token: &str) -> Result<ClaudeCreds> {
+    let body = format!(
+        "grant_type=refresh_token&refresh_token={}&client_id={}",
+        url_encode(refresh_token),
+        url_encode(CLAUDE_OAUTH_CLIENT_ID)
+    );
+    let (status, text) = curl_request(
+        CLAUDE_OAUTH_TOKEN_URL,
+        &[
+            ("Content-Type", "application/x-www-form-urlencoded".into()),
+            (
+                "User-Agent",
+                "claude-cli/2.1.112 (external, sdk-cli)".into(),
+            ),
+        ],
+        Some(body),
+    )?;
+    if !(200..300).contains(&status) {
+        bail!("OAuth refresh failed HTTP {status}: {text}");
+    }
+    let res: Value = serde_json::from_str(&text)?;
+    let access = res
+        .get("access_token")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("no access_token"))?
+        .to_string();
+    let refresh = res
+        .get("refresh_token")
+        .and_then(Value::as_str)
+        .unwrap_or(refresh_token)
+        .to_string();
+    let expires_in = res
+        .get("expires_in")
+        .and_then(Value::as_i64)
+        .unwrap_or(28800);
+    let expires_at = now_millis() + expires_in * 1000;
+
+    save_claude_credentials(&access, &refresh, expires_at);
+
+    Ok(ClaudeCreds {
+        access_token: access,
+        refresh_token: refresh,
+        expires_at,
+    })
+}
+
+fn save_claude_credentials(access: &str, refresh: &str, expires_at: i64) {
+    let payload = serde_json::json!({
+        "claudeAiOauth": {
+            "accessToken": access,
+            "refreshToken": refresh,
+            "expiresAt": expires_at
+        }
+    });
+    let _ = Command::new("security")
+        .args([
+            "add-generic-password",
+            "-U",
+            "-s",
+            "Claude Code-credentials",
+            "-w",
+            &payload.to_string(),
+        ])
+        .status();
+}
+
+fn fetch_claude_http_usage() -> Result<Provider> {
+    let mut creds = read_claude_credentials()?;
+    let now_ms = now_millis();
+    if creds.access_token.is_empty() || now_ms >= creds.expires_at - 60_000 {
+        if !creds.refresh_token.is_empty() {
+            if let Ok(new_creds) = refresh_claude_token(&creds.refresh_token) {
+                creds = new_creds;
+            }
+        }
+    }
+
+    if creds.access_token.is_empty() {
+        bail!("Claude Code access token unavailable");
+    }
+
+    let mut response = query_claude_messages_headers(&creds.access_token);
+    if let Ok((401, _, _)) = response {
+        if !creds.refresh_token.is_empty() {
+            if let Ok(new_creds) = refresh_claude_token(&creds.refresh_token) {
+                creds = new_creds;
+                response = query_claude_messages_headers(&creds.access_token);
+            }
+        }
+    }
+
+    let (status, resp_headers, _) = response?;
+    if !(200..300).contains(&status) {
+        bail!("Claude HTTP probe returned HTTP {status}");
+    }
+
+    parse_claude_rate_limit_headers(&resp_headers)
+}
+
+fn query_claude_messages_headers(
+    access_token: &str,
+) -> Result<(u16, HashMap<String, String>, String)> {
+    let headers = [
+        ("Authorization", format!("Bearer {access_token}")),
+        ("Content-Type", "application/json".into()),
+        ("Accept", "application/json".into()),
+        ("anthropic-version", "2023-06-01".into()),
+        (
+            "anthropic-beta",
+            "claude-code-20250219,oauth-2025-04-20".into(),
+        ),
+        (
+            "user-agent",
+            "claude-cli/2.1.112 (external, sdk-cli)".into(),
+        ),
+        ("x-app", "cli".into()),
+    ];
+    let body = serde_json::json!({
+        "model": "claude-haiku-4-5",
+        "max_tokens": 1,
+        "messages": [{"role": "user", "content": "hi"}]
+    });
+    curl_request_with_response_headers(CLAUDE_MESSAGES_URL, &headers, Some(body.to_string()))
+}
+
+fn parse_unix_timestamp_reset(ts: i64) -> Option<String> {
+    let date = if ts > 1_000_000_000_000 {
+        DateTime::<Utc>::from_timestamp(ts / 1000, 0)?.with_timezone(&Local)
+    } else {
+        DateTime::<Utc>::from_timestamp(ts, 0)?.with_timezone(&Local)
+    };
+    let now_date = Local::now().date_naive();
+    if date.date_naive() == now_date {
+        Some(date.format("%-I:%M%P").to_string())
+    } else {
+        Some(date.format("%b %-d %-I:%M%P").to_string())
+    }
+}
+
+fn parse_claude_rate_limit_headers(headers: &HashMap<String, String>) -> Result<Provider> {
+    let util_5h = headers
+        .get("anthropic-ratelimit-unified-5h-utilization")
+        .and_then(|v| v.parse::<f32>().ok())
+        .ok_or_else(|| anyhow!("missing 5h rate limit utilization header"))?;
+    let reset_5h_ts = headers
+        .get("anthropic-ratelimit-unified-5h-reset")
+        .and_then(|v| v.parse::<i64>().ok());
+
+    let util_7d = headers
+        .get("anthropic-ratelimit-unified-7d-utilization")
+        .and_then(|v| v.parse::<f32>().ok());
+    let reset_7d_ts = headers
+        .get("anthropic-ratelimit-unified-7d-reset")
+        .and_then(|v| v.parse::<i64>().ok());
+
+    let left_5h = ((1.0 - util_5h.clamp(0.0, 1.0)) * 100.0) as f32;
+    let reset_5h_str = reset_5h_ts.and_then(parse_unix_timestamp_reset);
+
+    let session_limit = Limit::new(Cadence::Session, left_5h)
+        .resets_at(reset_5h_str.unwrap_or_else(|| "unknown".into()));
+
+    let mut limits = vec![session_limit];
+
+    if let Some(util_7d) = util_7d {
+        let left_7d = ((1.0 - util_7d.clamp(0.0, 1.0)) * 100.0) as f32;
+        let reset_7d_str = reset_7d_ts.and_then(parse_unix_timestamp_reset);
+        limits.push(
+            Limit::new(Cadence::Weekly, left_7d)
+                .resets_at(reset_7d_str.unwrap_or_else(|| "unknown".into())),
+        );
+    }
+
+    let used = 100.0 - left_5h;
+    Ok(Provider {
+        id: "claude-code".into(),
+        name: "Claude Code".into(),
+        badge: "C".into(),
+        badge_bg: 0xd97757,
+        badge_fg: 0x2b1206,
+        plan: "Subscription".into(),
+        console_url: "https://claude.ai/settings/usage".into(),
+        limits,
+        burn: Burn::new(
+            vec![used * 0.55 / 100.0, used * 0.75 / 100.0, used / 100.0],
+            "Claude Code API headers",
+            if left_5h < 20.0 {
+                Trend::Rising
+            } else {
+                Trend::Steady
+            },
+        ),
+    })
 }
 
 fn parse_claude_window(text: &str, label: &str) -> Option<(f32, String)> {
@@ -709,7 +971,36 @@ fn resolve_command(name: &str) -> Result<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_claude_window, parse_go_plan, parse_go_usage, percent_left};
+    use super::{
+        parse_claude_rate_limit_headers, parse_claude_window, parse_go_plan, parse_go_usage,
+        percent_left,
+    };
+    use std::collections::HashMap;
+
+    #[test]
+    fn parses_claude_rate_limit_headers_correctly() {
+        let mut headers = HashMap::new();
+        headers.insert(
+            "anthropic-ratelimit-unified-5h-utilization".into(),
+            "0.15".into(),
+        );
+        headers.insert(
+            "anthropic-ratelimit-unified-5h-reset".into(),
+            "1787416800".into(),
+        );
+        headers.insert(
+            "anthropic-ratelimit-unified-7d-utilization".into(),
+            "0.40".into(),
+        );
+        headers.insert(
+            "anthropic-ratelimit-unified-7d-reset".into(),
+            "1787835600".into(),
+        );
+
+        let provider = parse_claude_rate_limit_headers(&headers).unwrap();
+        assert!((provider.primary().percent_left - 85.0).abs() < 0.01);
+        assert!((provider.secondary()[0].percent_left - 60.0).abs() < 0.01);
+    }
 
     #[test]
     fn parses_claude_used_percent_and_reset_time() {
