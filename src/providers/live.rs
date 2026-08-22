@@ -265,7 +265,7 @@ impl UsageSource for ClaudeCode {
                     plan: "Run claude login".into(),
                     console_url: "https://claude.ai/settings/usage".into(),
                     limits: vec![
-                        Limit::new(Cadence::Session, 0.0).resets_at("run claude login"),
+                        Limit::new(Cadence::Session, 0.0).resets_at("login needed"),
                         Limit::new(Cadence::Weekly, 0.0),
                     ],
                     burn: Burn::new(
