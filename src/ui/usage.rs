@@ -103,6 +103,9 @@ fn provider_row(
 ) -> impl IntoElement {
     let primary = provider.primary();
     let show_secondary = !only_active;
+    let is_unauth = primary.resets_at.as_deref().map(|s| s as &str) == Some("login needed")
+        || provider.plan == "Run claude login";
+    let effective_health = if is_unauth { Health::Ok } else { health };
 
     let id = provider.id.clone();
     let toggle = {
@@ -152,9 +155,9 @@ fn provider_row(
                                 .text_size(px(11.))
                                 .mt(px(1.))
                                 .whitespace_nowrap()
-                                .text_color(match health {
+                                .text_color(match effective_health {
                                     Health::Ok => theme::c(theme::TEXT_MUTED).into(),
-                                    _ => health.color(),
+                                    _ => effective_health.color(),
                                 })
                                 .child(provider.subtitle()),
                         ),
@@ -165,8 +168,8 @@ fn provider_row(
                         .flex_shrink_0()
                         .flex()
                         .child(striped_bar(
-                            primary.consumed(),
-                            health.color(),
+                            if is_unauth { 0.0 } else { primary.consumed() },
+                            effective_health.color(),
                             theme::BAR_HEIGHT,
                         )),
                 )
@@ -177,9 +180,17 @@ fn provider_row(
                         .font_family(fonts.mono.clone())
                         .text_size(px(12.))
                         .font_weight(FontWeight(500.0))
-                        .text_color(health.color())
+                        .text_color(if is_unauth {
+                            theme::c(theme::TEXT_MUTED)
+                        } else {
+                            effective_health.color()
+                        })
                         .text_right()
-                        .child(format!("{}%", primary.percent_left.round() as i32)),
+                        .child(if is_unauth {
+                            "--".to_string()
+                        } else {
+                            format!("{}%", primary.percent_left.round() as i32)
+                        }),
                 )
                 .child(
                     div()
@@ -192,7 +203,13 @@ fn provider_row(
                 ),
         )
         .when(expanded, |d| {
-            d.child(detail(provider, health, warn_at, show_secondary, cx))
+            d.child(detail(
+                provider,
+                effective_health,
+                warn_at,
+                show_secondary,
+                cx,
+            ))
         })
 }
 

@@ -976,12 +976,46 @@ impl UsageSource for Antigravity {
             if usable.iter().any(|(_, _, reset)| reset.is_some()) {
                 usable.retain(|(_, _, reset)| reset.is_some());
             }
-            if let Some((_, left, reset)) = usable.into_iter().min_by(|a, b| a.1.total_cmp(&b.1)) {
+            if !usable.is_empty() {
+                let primary_idx = usable
+                    .iter()
+                    .position(|(m, _, _)| {
+                        m.contains("gemini-3-flash") || m.contains("gemini-3.7-flash")
+                    })
+                    .unwrap_or_else(|| {
+                        usable
+                            .iter()
+                            .enumerate()
+                            .min_by(|(_, a), (_, b)| a.1.total_cmp(&b.1))
+                            .map(|(i, _)| i)
+                            .unwrap_or(0)
+                    });
+
+                let (_primary_model, primary_left, primary_reset) = usable.remove(primary_idx);
+
+                let mut limits = vec![
+                    Limit::new(Cadence::Daily, primary_left)
+                        .resets_at(primary_reset.unwrap_or_else(|| "unknown".into())),
+                ];
+
+                for (model, left, reset) in usable {
+                    let is_key_secondary = model.contains("pro")
+                        || model.contains("claude")
+                        || model.contains("opus")
+                        || model.contains("sonnet");
+                    if is_key_secondary {
+                        limits.push(
+                            Limit::new(Cadence::Daily, left)
+                                .resets_at(reset.unwrap_or_else(|| "unknown".into())),
+                        );
+                    }
+                }
+
                 let tier = load
                     .pointer("/currentTier/name")
                     .and_then(Value::as_str)
                     .or_else(|| load.pointer("/planInfo/planType").and_then(Value::as_str))
-                    .unwrap_or("Google account")
+                    .unwrap_or("Antigravity")
                     .to_string();
                 return Ok(Provider {
                     id: "antigravity".into(),
@@ -991,14 +1025,15 @@ impl UsageSource for Antigravity {
                     badge_fg: 0xffffff,
                     plan: tier.into(),
                     console_url: "https://aistudio.google.com".into(),
-                    limits: vec![
-                        Limit::new(Cadence::Daily, left)
-                            .resets_at(reset.unwrap_or_else(|| "unknown".into())),
-                    ],
+                    limits,
                     burn: Burn::new(
-                        vec![0.25, (100.0 - left) / 100.0 * 0.7, (100.0 - left) / 100.0],
+                        vec![
+                            0.25,
+                            (100.0 - primary_left) / 100.0 * 0.7,
+                            (100.0 - primary_left) / 100.0,
+                        ],
                         "live Antigravity quota",
-                        if left < 20.0 {
+                        if primary_left < 20.0 {
                             Trend::Rising
                         } else {
                             Trend::Steady
