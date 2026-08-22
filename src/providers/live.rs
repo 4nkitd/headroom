@@ -252,7 +252,30 @@ impl UsageSource for ClaudeCode {
     }
 
     fn fetch(&self) -> Result<Provider> {
-        fetch_claude_http_usage()
+        match fetch_claude_http_usage() {
+            Ok(p) => Ok(p),
+            Err(err) => {
+                eprintln!("headroom: Claude Code HTTP probe failed: {err:#}");
+                Ok(Provider {
+                    id: "claude-code".into(),
+                    name: "Claude Code".into(),
+                    badge: "C".into(),
+                    badge_bg: 0xd97757,
+                    badge_fg: 0x2b1206,
+                    plan: "Run claude login".into(),
+                    console_url: "https://claude.ai/settings/usage".into(),
+                    limits: vec![
+                        Limit::new(Cadence::Session, 0.0).resets_at("run claude login"),
+                        Limit::new(Cadence::Weekly, 0.0),
+                    ],
+                    burn: Burn::new(
+                        vec![0.0, 0.0, 0.0],
+                        "run `claude login` in terminal",
+                        Trend::Steady,
+                    ),
+                })
+            }
+        }
     }
 }
 
@@ -262,7 +285,7 @@ struct ClaudeCreds {
     expires_at: i64,
 }
 
-fn read_claude_credentials() -> Result<ClaudeCreds> {
+fn read_claude_keychain_credentials() -> Result<ClaudeCreds> {
     let output = Command::new("security")
         .args([
             "find-generic-password",
@@ -297,6 +320,47 @@ fn read_claude_credentials() -> Result<ClaudeCreds> {
         refresh_token: refresh,
         expires_at: expires,
     })
+}
+
+fn read_claude_opencode_credentials() -> Result<ClaudeCreds> {
+    let home = dirs::home_dir().ok_or_else(|| anyhow!("no home dir"))?;
+    let path = home.join(".local/share/opencode/auth.json");
+    let raw = std::fs::read_to_string(path)?;
+    let value: Value = serde_json::from_str(&raw)?;
+    let anthropic = value
+        .get("anthropic")
+        .ok_or_else(|| anyhow!("no anthropic in auth.json"))?;
+    let access = anthropic
+        .get("access")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    let refresh = anthropic
+        .get("refresh")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    let expires = anthropic
+        .get("expires")
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
+    if access.is_empty() && refresh.is_empty() {
+        bail!("missing anthropic tokens in auth.json");
+    }
+    Ok(ClaudeCreds {
+        access_token: access,
+        refresh_token: refresh,
+        expires_at: expires,
+    })
+}
+
+fn read_claude_credentials() -> Result<ClaudeCreds> {
+    if let Ok(creds) = read_claude_keychain_credentials() {
+        if !creds.access_token.is_empty() || !creds.refresh_token.is_empty() {
+            return Ok(creds);
+        }
+    }
+    read_claude_opencode_credentials()
 }
 
 fn refresh_claude_token(refresh_token: &str) -> Result<ClaudeCreds> {
@@ -346,6 +410,9 @@ fn refresh_claude_token(refresh_token: &str) -> Result<ClaudeCreds> {
 }
 
 fn save_claude_credentials(access: &str, refresh: &str, expires_at: i64) {
+    if access.trim().is_empty() || refresh.trim().is_empty() {
+        return;
+    }
     let payload = serde_json::json!({
         "claudeAiOauth": {
             "accessToken": access,

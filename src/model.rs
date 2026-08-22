@@ -146,7 +146,7 @@ impl Default for Prefs {
     fn default() -> Self {
         Self {
             show_percentage_in_menu_bar: true,
-            only_show_active_limit: true,
+            only_show_active_limit: false,
             launch_at_login: crate::autostart::is_enabled(),
             warn_at: 80.0,
         }

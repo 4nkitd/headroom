@@ -22,7 +22,7 @@ fn main() {
 
     // Help / Version flags
     if args.iter().any(|a| a == "-h" || a == "--help") {
-        println!("Headroom v0.3.1 — macOS Menu Bar AI Subscription Usage Tracker");
+        println!("Headroom v0.3.2 — macOS Menu Bar AI Subscription Usage Tracker");
         println!();
         println!("USAGE:");
         println!("    headroom [FLAGS] [COMMAND]");
@@ -39,7 +39,7 @@ fn main() {
     }
 
     if args.iter().any(|a| a == "-v" || a == "--version") {
-        println!("headroom 0.3.1");
+        println!("headroom 0.3.2");
         return;
     }
 
