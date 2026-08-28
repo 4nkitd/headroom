@@ -3,7 +3,7 @@
 //! Everything the UI paints resolves through here so the whole surface can be
 //! retuned in one place.
 
-use gpui::{Hsla, Rgba, rgb, rgba};
+use gpui::{Rgba, rgb, rgba};
 
 /// Popover fill. Fully opaque black per user preference.
 pub const PANEL_BG: u32 = 0x000000ff;
@@ -25,6 +25,10 @@ pub const TEXT_DIM: u32 = 0xffffff4d;
 pub const DIVIDER: u32 = 0xffffff17;
 pub const TRACK: u32 = 0xffffff1f;
 pub const ROW_HOVER: u32 = 0xffffff0f;
+pub const API_BADGE_BG: u32 = 0x30d1581f;
+pub const API_BADGE_TEXT: u32 = 0x63df7fff;
+pub const OK_TEXT: u32 = 0x30d158ff;
+pub const WARN_TEXT: u32 = 0xffd60aff;
 
 pub const LINK: u32 = 0x6fa8ff;
 pub const LINK_HOVER: u32 = 0x9cc4ff;
@@ -37,8 +41,6 @@ pub const CRITICAL: u32 = 0xff9f0a;
 pub const CONTROL_ON: u32 = 0x30d158ff;
 pub const CONTROL_OFF: u32 = 0xffffff2e;
 pub const CONTROL_KNOB: u32 = 0xffffffff;
-pub const SLIDER_TRACK: u32 = 0xffffff29;
-pub const SLIDER_FILL: u32 = 0xffffff8c;
 
 /// Preferred monospace families, best first. Resolved against the installed
 /// font set at startup — see [`crate::ui::Fonts`].
@@ -61,9 +63,9 @@ pub const PANEL_TOP_INSET: f32 = 34.0;
 pub const PANEL_EDGE_MARGIN: f32 = 12.0;
 pub const PANEL_USAGE_CHROME_HEIGHT: f32 = 134.0;
 pub const PANEL_PROVIDER_ROW_HEIGHT: f32 = 40.0;
-pub const PANEL_DETAIL_HEIGHT: f32 = 48.0;
+pub const PANEL_DETAIL_HEIGHT: f32 = 66.0;
 pub const PANEL_SECONDARY_ROW_HEIGHT: f32 = 28.0;
-pub const PANEL_PREFS_HEIGHT: f32 = 448.0;
+pub const PANEL_PREFS_HEIGHT: f32 = 620.0;
 
 /// How a limit is doing, derived from headroom remaining and the user's warn
 /// threshold rather than hardcoded cutoffs.
@@ -95,14 +97,6 @@ impl Health {
             Health::Critical => rgb(CRITICAL),
         }
     }
-}
-
-/// `rgba()` with the alpha expressed as a float, for tokens that are easier to
-/// read that way.
-pub fn alpha(hex: u32, a: f32) -> Hsla {
-    let mut c: Hsla = rgb(hex).into();
-    c.a = a;
-    c
 }
 
 pub fn c(token: u32) -> Rgba {

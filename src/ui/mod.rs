@@ -4,9 +4,22 @@ pub mod text_input;
 pub mod usage;
 pub mod widgets;
 
-use gpui::{App, Global, SharedString};
+use gpui::{App, Global, KeyBinding, SharedString, actions};
 
 use crate::theme;
+
+actions!(headroom, [Refresh, Activate, Tab, TabPrev, Back]);
+
+pub fn bind_keys(cx: &mut App) {
+    cx.bind_keys([
+        KeyBinding::new("cmd-r", Refresh, None),
+        KeyBinding::new("enter", Activate, None),
+        KeyBinding::new("space", Activate, None),
+        KeyBinding::new("tab", Tab, None),
+        KeyBinding::new("shift-tab", TabPrev, None),
+        KeyBinding::new("escape", Back, None),
+    ]);
+}
 
 /// Font families resolved against what is actually installed, so a missing
 /// IBM Plex Mono degrades to SF Mono rather than to the UI font.

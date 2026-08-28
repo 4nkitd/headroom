@@ -1,12 +1,16 @@
 //! Headroom: macOS Menu Bar AI Subscription Usage Tracker in Rust + GPUI.
 
 mod app_state;
+mod assets;
 mod autostart;
 mod credentials;
+mod diagnostics;
 mod model;
 mod providers;
+mod settings;
 mod theme;
 mod ui;
+mod update;
 
 #[cfg(target_os = "macos")]
 mod status_item;
@@ -22,7 +26,10 @@ fn main() {
 
     // Help / Version flags
     if args.iter().any(|a| a == "-h" || a == "--help") {
-        println!("Headroom v0.3.4 — macOS Menu Bar AI Subscription Usage Tracker");
+        println!(
+            "Headroom v{} — macOS Menu Bar AI Subscription Usage Tracker",
+            env!("CARGO_PKG_VERSION")
+        );
         println!();
         println!("USAGE:");
         println!("    headroom [FLAGS] [COMMAND]");
@@ -39,7 +46,21 @@ fn main() {
     }
 
     if args.iter().any(|a| a == "-v" || a == "--version") {
-        println!("headroom 0.3.4");
+        println!("headroom {}", env!("CARGO_PKG_VERSION"));
+        return;
+    }
+
+    if args
+        .iter()
+        .any(|a| a == "diagnostics" || a == "--diagnostics")
+    {
+        match diagnostics::static_report_json() {
+            Ok(report) => println!("{report}"),
+            Err(error) => {
+                eprintln!("Failed to create diagnostics: {error:#}");
+                std::process::exit(1);
+            }
+        }
         return;
     }
 
@@ -104,12 +125,13 @@ fn main() {
         }
     }
 
-    let app = Application::new();
+    let app = Application::new().with_assets(assets::EmbeddedAssets);
 
     app.run(move |cx: &mut App| {
         ui::text_input::bind_keys(cx);
-        let state = cx.new(|cx| AppState::new(cx));
-        AppState::set_global(state.clone(), cx);
+        ui::bind_keys(cx);
+        cx.set_global(ui::Fonts::resolve(cx));
+        let state = cx.new(AppState::new);
 
         // No window at startup — the popover opens on demand from the menu bar.
         #[cfg(target_os = "macos")]

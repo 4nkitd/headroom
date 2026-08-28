@@ -5,8 +5,8 @@
 //! time.
 
 use gpui::{
-    Bounds, Div, FontWeight, IntoElement, PathBuilder, Pixels, Rgba, SharedString, Styled, canvas,
-    div, point, prelude::*, px, quad, rgb, size, transparent_black,
+    Bounds, Div, FontWeight, IntoElement, ObjectFit, Pixels, Rgba, SharedString, Styled,
+    StyledImage, canvas, div, img, point, prelude::*, px, quad, rgb, size, transparent_black,
 };
 
 use crate::theme;
@@ -20,26 +20,40 @@ pub fn divider() -> Div {
         .flex_shrink_0()
 }
 
-/// The rounded single-letter provider mark.
+/// A provider's brand mark with the legacy initial as a decode fallback.
 pub fn badge(
+    logo: SharedString,
     letter: SharedString,
     bg: u32,
     fg: u32,
     size_px: f32,
     radius: f32,
 ) -> impl IntoElement {
+    let fallback = move || {
+        div()
+            .size_full()
+            .flex()
+            .items_center()
+            .justify_center()
+            .bg(rgb(bg))
+            .text_color(rgb(fg))
+            .text_size(px(size_px * 0.55))
+            .font_weight(FontWeight(700.0))
+            .child(letter.clone())
+            .into_any_element()
+    };
+
     div()
         .size(px(size_px))
         .flex_shrink_0()
         .rounded(px(radius))
-        .flex()
-        .items_center()
-        .justify_center()
-        .bg(rgb(bg))
-        .text_color(rgb(fg))
-        .text_size(px(size_px * 0.55))
-        .font_weight(FontWeight(700.0))
-        .child(letter)
+        .overflow_hidden()
+        .child(
+            img(logo)
+                .size_full()
+                .object_fit(ObjectFit::Contain)
+                .with_fallback(fallback),
+        )
 }
 
 /// A quota bar: rounded track with a striped fill covering the consumed
@@ -89,42 +103,6 @@ pub fn striped_bar(fraction: f32, color: Rgba, height: f32) -> impl IntoElement 
         )
 }
 
-/// The recent-consumption sparkline. `samples` are 0.0–1.0, oldest first, and
-/// are drawn with 0 at the bottom.
-pub fn sparkline(samples: Vec<f32>, color: Rgba, width: f32, height: f32) -> impl IntoElement {
-    div().w(px(width)).h(px(height)).flex_shrink_0().child(
-        canvas(
-            |_, _, _| {},
-            move |bounds: Bounds<Pixels>, _, window, _| {
-                if samples.len() < 2 {
-                    return;
-                }
-                // Inset by half the stroke so the extremes are not clipped.
-                let inset = px(1.0);
-                let w = bounds.size.width;
-                let h = bounds.size.height - inset * 2.;
-                let step = w / (samples.len() - 1) as f32;
-
-                let mut builder = PathBuilder::stroke(px(1.4));
-                for (i, sample) in samples.iter().enumerate() {
-                    let x = bounds.origin.x + step * i as f32;
-                    let y = bounds.origin.y + inset + h * (1.0 - sample.clamp(0.0, 1.0));
-                    let p = point(x, y);
-                    if i == 0 {
-                        builder.move_to(p);
-                    } else {
-                        builder.line_to(p);
-                    }
-                }
-                if let Ok(path) = builder.build() {
-                    window.paint_path(path, color);
-                }
-            },
-        )
-        .size_full(),
-    )
-}
-
 /// macOS-style switch. Purely presentational — the caller wires the click.
 pub fn toggle(on: bool) -> impl IntoElement {
     let track = if on {
@@ -147,68 +125,6 @@ pub fn toggle(on: bool) -> impl IntoElement {
                 .size(px(16.))
                 .rounded(px(8.))
                 .bg(theme::c(theme::CONTROL_KNOB)),
-        )
-}
-
-/// Continuous slider for the warn threshold. `fraction` is 0.0–1.0.
-pub fn slider(fraction: f32, width: f32) -> impl IntoElement {
-    let fraction = fraction.clamp(0.0, 1.0);
-    div()
-        .w(px(width))
-        .h(px(14.))
-        .flex_shrink_0()
-        .flex()
-        .items_center()
-        .child(
-            canvas(
-                |_, _, _| {},
-                move |bounds: Bounds<Pixels>, _, window, _| {
-                    let track_h = px(4.);
-                    let track_y = bounds.origin.y + (bounds.size.height - track_h) / 2.;
-                    let track = Bounds {
-                        origin: point(bounds.origin.x, track_y),
-                        size: size(bounds.size.width, track_h),
-                    };
-                    window.paint_quad(quad(
-                        track,
-                        px(2.),
-                        theme::c(theme::SLIDER_TRACK),
-                        px(0.),
-                        transparent_black(),
-                        Default::default(),
-                    ));
-
-                    let filled = bounds.size.width * fraction;
-                    window.paint_quad(quad(
-                        Bounds {
-                            origin: track.origin,
-                            size: size(filled, track_h),
-                        },
-                        px(2.),
-                        theme::c(theme::SLIDER_FILL),
-                        px(0.),
-                        transparent_black(),
-                        Default::default(),
-                    ));
-
-                    let knob = px(14.);
-                    window.paint_quad(quad(
-                        Bounds {
-                            origin: point(
-                                bounds.origin.x + filled - knob / 2.,
-                                bounds.origin.y + (bounds.size.height - knob) / 2.,
-                            ),
-                            size: size(knob, knob),
-                        },
-                        knob / 2.,
-                        theme::c(theme::CONTROL_KNOB),
-                        px(0.),
-                        transparent_black(),
-                        Default::default(),
-                    ));
-                },
-            )
-            .size_full(),
         )
 }
 

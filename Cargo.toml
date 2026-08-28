@@ -1,6 +1,6 @@
 [package]
 name = "headroom"
-version = "0.3.4"
+version = "0.4.0"
 edition = "2024"
 
 [dependencies]
@@ -11,10 +11,15 @@ dirs = "6"
 gpui = { version = "0.2.2", features = ["runtime_shaders"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+async-channel = "2"
+futures-lite = "2"
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
+security-framework = "3.7"
 objc2 = "0.6"
 objc2-app-kit = { version = "0.3", features = [
+    "NSAccessibilityProtocols",
     "NSApplication",
     "NSButton",
     "NSControl",

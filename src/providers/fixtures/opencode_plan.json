@@ -1,0 +1,8 @@
+{
+  "plan": "go",
+  "windows": {
+    "rolling": { "usage_percent": 65, "resets_in_seconds": 2520 },
+    "weekly": { "usage_percent": 30, "resets_in_seconds": 259200 },
+    "monthly": { "usage_percent": 12, "resets_in_seconds": 1728000 }
+  }
+}

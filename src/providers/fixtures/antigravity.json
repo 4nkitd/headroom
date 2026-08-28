@@ -1,0 +1,25 @@
+{
+  "load": {
+    "currentTier": { "name": "pro" },
+    "cloudaicompanionProject": "fixture-project"
+  },
+  "quota": {
+    "models": [
+      {
+        "modelId": "gemini-3.7-flash",
+        "remainingFraction": 0.41,
+        "resetTime": "2026-08-29T00:00:00Z"
+      },
+      {
+        "modelId": "claude-sonnet-4",
+        "remainingFraction": 0.72,
+        "resetTime": "2026-08-29T00:00:00Z"
+      },
+      {
+        "modelId": "chat_fixture",
+        "remainingFraction": 0.99,
+        "resetTime": "2026-08-29T00:00:00Z"
+      }
+    ]
+  }
+}

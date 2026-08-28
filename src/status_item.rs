@@ -6,9 +6,10 @@
 //! (window loses key status) or on a second click.
 
 use std::sync::OnceLock;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
+use async_channel::{Receiver, Sender};
+use futures_lite::future;
 use gpui::{
     AnyWindowHandle, App, AppContext, AsyncApp, Bounds, Entity, WindowBackgroundAppearance,
     WindowBounds, WindowHandle, WindowKind, WindowOptions, point, px, size,
@@ -28,14 +29,13 @@ use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
 #[cfg(target_os = "macos")]
 use objc2_app_kit::{
-    NSApplication, NSApplicationActivationPolicy, NSStatusBar, NSStatusItem,
+    NSAccessibility, NSApplication, NSApplicationActivationPolicy, NSStatusBar, NSStatusItem,
     NSVariableStatusItemLength,
 };
 #[cfg(target_os = "macos")]
 use objc2_foundation::{MainThreadMarker, NSObject, NSString};
 
-/// Set by the status item action, consumed by the popover loop.
-static TOGGLE_REQUESTED: AtomicBool = AtomicBool::new(false);
+static TOGGLE_SENDER: OnceLock<Sender<()>> = OnceLock::new();
 
 /// The live status item as a raw pointer (NSStatusItem is !Sync; the status
 /// bar owns it for the app's lifetime anyway).
@@ -45,7 +45,7 @@ unsafe impl Sync for StatusItemPtr {}
 
 static STATUS_ITEM: OnceLock<StatusItemPtr> = OnceLock::new();
 
-const POLL_INTERVAL: Duration = Duration::from_millis(50);
+const OPEN_POLL_INTERVAL: Duration = Duration::from_millis(100);
 /// A freshly opened popover must have this long to become key before an
 /// inactive status is treated as an outside click.
 const ACTIVE_GRACE: Duration = Duration::from_millis(400);
@@ -61,7 +61,15 @@ pub fn status_label(state: &AppState) -> String {
             format!("{} {}%", p.badge, p.primary().percent_left.round() as i32)
         }
         Some(p) => p.badge.to_string(),
-        None => "?".into(),
+        None if state.is_refreshing => "H …".into(),
+        None if state
+            .integrations
+            .iter()
+            .any(|integration| integration.error.is_some()) =>
+        {
+            "H !".into()
+        }
+        None => "H".into(),
     }
 }
 
@@ -74,7 +82,9 @@ define_class!(
     impl StatusTarget {
         #[unsafe(method(action_clicked:))]
         fn action_clicked(&self, _sender: &AnyObject) {
-            TOGGLE_REQUESTED.store(true, Ordering::Relaxed);
+            if let Some(sender) = TOGGLE_SENDER.get() {
+                let _ = sender.try_send(());
+            }
         }
     }
 );
@@ -89,13 +99,22 @@ impl StatusTarget {
 
 #[cfg(target_os = "macos")]
 pub fn setup_status_bar_item(cx: &mut App, state: Entity<AppState>) {
+    let (toggle_sender, toggle_receiver) = async_channel::bounded(1);
+    let _ = TOGGLE_SENDER.set(toggle_sender);
     if let Some(mtm) = MainThreadMarker::new() {
         let application = NSApplication::sharedApplication(mtm);
         application.setActivationPolicy(NSApplicationActivationPolicy::Accessory);
         let status_bar = NSStatusBar::systemStatusBar();
         let item = status_bar.statusItemWithLength(NSVariableStatusItemLength);
         if let Some(button) = item.button(mtm) {
-            button.setTitle(&NSString::from_str(&status_label(state.read(cx))));
+            let label = status_label(state.read(cx));
+            button.setTitle(&NSString::from_str(&label));
+            button.setAccessibilityLabel(Some(&NSString::from_str(&format!(
+                "Headroom subscription usage, {label}"
+            ))));
+            button.setAccessibilityHelp(Some(&NSString::from_str(
+                "Open Headroom usage details and preferences",
+            )));
             let target = StatusTarget::new();
             unsafe {
                 button.setTarget(Some(&target));
@@ -111,31 +130,55 @@ pub fn setup_status_bar_item(cx: &mut App, state: Entity<AppState>) {
     }
 
     let cx = cx.to_async();
-    cx.spawn(async move |cx| popover_loop(cx, state).await)
+    cx.spawn(async move |cx| popover_loop(cx, state, toggle_receiver).await)
         .detach();
 }
 
 #[cfg(target_os = "macos")]
 fn set_status_title(label: &str) {
-    if let Some(mtm) = MainThreadMarker::new() {
-        if let Some(ptr) = STATUS_ITEM.get() {
-            let item: &NSStatusItem = unsafe { &*(ptr.0 as *const NSStatusItem) };
-            if let Some(button) = item.button(mtm) {
-                button.setTitle(&NSString::from_str(label));
-            }
-        }
+    let Some(mtm) = MainThreadMarker::new() else {
+        return;
+    };
+    let Some(ptr) = STATUS_ITEM.get() else {
+        return;
+    };
+    let item: &NSStatusItem = unsafe { &*(ptr.0 as *const NSStatusItem) };
+    if let Some(button) = item.button(mtm) {
+        button.setTitle(&NSString::from_str(label));
+        button.setAccessibilityLabel(Some(&NSString::from_str(&format!(
+            "Headroom subscription usage, {label}"
+        ))));
     }
 }
 
 #[cfg(target_os = "macos")]
-async fn popover_loop(cx: &mut AsyncApp, state: Entity<AppState>) {
+async fn popover_loop(cx: &mut AsyncApp, state: Entity<AppState>, toggle_receiver: Receiver<()>) {
     let mut window: Option<AnyWindowHandle> = None;
     let mut opened_at: Option<Instant> = None;
     let mut closed_at: Option<Instant> = None;
     let mut last_title = Instant::now() - TITLE_REFRESH;
 
     loop {
-        cx.background_executor().timer(POLL_INTERVAL).await;
+        enum Wake {
+            Toggle,
+            Timer,
+        }
+        let delay = if window.is_some() {
+            OPEN_POLL_INTERVAL
+        } else {
+            TITLE_REFRESH
+        };
+        let wake = future::race(
+            async {
+                let _ = toggle_receiver.recv().await;
+                Wake::Toggle
+            },
+            async {
+                cx.background_executor().timer(delay).await;
+                Wake::Timer
+            },
+        )
+        .await;
         let now = Instant::now();
 
         if now.duration_since(last_title) >= TITLE_REFRESH {
@@ -145,7 +188,7 @@ async fn popover_loop(cx: &mut AsyncApp, state: Entity<AppState>) {
             }
         }
 
-        if TOGGLE_REQUESTED.swap(false, Ordering::Relaxed) {
+        if matches!(wake, Wake::Toggle) {
             if let Some(handle) = window.take() {
                 let _ = handle.update(cx, |_, w, _| w.remove_window());
                 opened_at = None;

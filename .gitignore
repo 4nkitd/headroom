@@ -3,3 +3,4 @@
 *.log
 audio_*
 .DS_Store
+/dist

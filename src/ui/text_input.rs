@@ -75,7 +75,7 @@ pub struct SecretInput {
 impl SecretInput {
     pub fn new(cx: &mut Context<Self>) -> Self {
         Self {
-            focus_handle: cx.focus_handle(),
+            focus_handle: cx.focus_handle().tab_index(4).tab_stop(true),
             content: String::new(),
             placeholder: "Paste API key".into(),
             selected_range: 0..0,
@@ -194,12 +194,11 @@ impl SecretInput {
 
     fn cursor_offset(&self) -> usize {
         let range = self.clamp_range(self.selected_range.clone());
-        let offset = if self.selection_reversed {
+        if self.selection_reversed {
             range.start
         } else {
             range.end
-        };
-        offset
+        }
     }
 
     fn clamp_range(&self, range: Range<usize>) -> Range<usize> {
@@ -573,10 +572,10 @@ impl Element for TextElement {
             .line
             .paint(bounds.origin, window.line_height(), window, cx)
             .ok();
-        if focus_handle.is_focused(window) {
-            if let Some(cursor) = prepaint.cursor.take() {
-                window.paint_quad(cursor);
-            }
+        if focus_handle.is_focused(window)
+            && let Some(cursor) = prepaint.cursor.take()
+        {
+            window.paint_quad(cursor);
         }
         self.input.update(cx, |input, _| {
             input.last_layout = Some(prepaint.line.clone());

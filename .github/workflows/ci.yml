@@ -1,0 +1,27 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  macos:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo test
+      - run: cargo build --release
+      - run: scripts/package_app.sh --skip-build
+      - run: scripts/collect_metrics.sh dist/performance-metrics.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: headroom-macos-${{ github.sha }}
+          path: |
+            dist/*.zip
+            dist/performance-metrics.txt

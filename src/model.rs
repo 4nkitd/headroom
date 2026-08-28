@@ -2,6 +2,8 @@
 //! left. Deliberately provider-agnostic — every backend in `providers/`
 //! normalises into these.
 
+use std::collections::HashSet;
+
 use gpui::SharedString;
 use serde::{Deserialize, Serialize};
 
@@ -31,6 +33,8 @@ impl Cadence {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Limit {
     pub cadence: Cadence,
+    /// Provider-specific bucket name when cadence alone is ambiguous.
+    pub label: Option<SharedString>,
     /// Headroom remaining, 0.0–100.0.
     pub percent_left: f32,
     /// Human-readable reset time, e.g. `"11:55"`. `None` when unknown.
@@ -41,6 +45,7 @@ impl Limit {
     pub fn new(cadence: Cadence, percent_left: f32) -> Self {
         Self {
             cadence,
+            label: None,
             percent_left: percent_left.clamp(0.0, 100.0),
             resets_at: None,
         }
@@ -51,37 +56,21 @@ impl Limit {
         self
     }
 
+    pub fn label(mut self, label: impl Into<SharedString>) -> Self {
+        self.label = Some(label.into());
+        self
+    }
+
+    pub fn display_label(&self) -> &str {
+        self.label
+            .as_ref()
+            .map(|label| label.as_ref())
+            .unwrap_or_else(|| self.cadence.label())
+    }
+
     /// Fraction of the bucket already consumed — what the bar actually fills.
     pub fn consumed(&self) -> f32 {
         (100.0 - self.percent_left) / 100.0
-    }
-}
-
-/// Direction of travel for a provider's recent consumption.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Trend {
-    Rising,
-    Steady,
-    Falling,
-}
-
-/// Recent consumption history plus a one-line read on it, rendered as the
-/// sparkline in the expanded row.
-#[derive(Clone, Debug)]
-pub struct Burn {
-    /// Normalised 0.0–1.0 samples, oldest first.
-    pub samples: Vec<f32>,
-    pub note: SharedString,
-    pub trend: Trend,
-}
-
-impl Burn {
-    pub fn new(samples: Vec<f32>, note: impl Into<SharedString>, trend: Trend) -> Self {
-        Self {
-            samples,
-            note: note.into(),
-            trend,
-        }
     }
 }
 
@@ -91,7 +80,9 @@ pub struct Provider {
     /// Stable key used for element ids and preference lookups.
     pub id: SharedString,
     pub name: SharedString,
-    /// Single-letter mark shown in the row's rounded badge.
+    /// Embedded brand asset shown in provider rows.
+    pub logo: SharedString,
+    /// Single-letter fallback if the brand asset cannot be decoded.
     pub badge: SharedString,
     /// Badge fill / badge glyph colours, as `0xRRGGBB`.
     pub badge_bg: u32,
@@ -100,9 +91,10 @@ pub struct Provider {
     pub plan: SharedString,
     /// Where "Console ↗" points.
     pub console_url: SharedString,
+    /// Human-readable provenance for the usage value.
+    pub source_label: SharedString,
     /// At least one entry; `limits[0]` is the headline limit.
     pub limits: Vec<Limit>,
-    pub burn: Burn,
 }
 
 impl Provider {
@@ -118,14 +110,18 @@ impl Provider {
     /// Compact subtitle line with the active window and reset time.
     pub fn subtitle(&self) -> String {
         let primary = self.primary();
-        let window = match primary.cadence {
-            Cadence::Session => "5h session",
-            Cadence::Daily => "Daily",
-            Cadence::Weekly => "Weekly",
-            Cadence::Monthly => "Monthly",
-        };
+        let window = primary
+            .label
+            .as_ref()
+            .map(|label| label.as_ref())
+            .unwrap_or(match primary.cadence {
+                Cadence::Session => "5h session",
+                Cadence::Daily => "Daily",
+                Cadence::Weekly => "Weekly",
+                Cadence::Monthly => "Monthly",
+            });
         match &primary.resets_at {
-            Some(at) => format!("{window} \u{00b7} reset {at}"),
+            Some(at) => format!("{window} \u{00b7} {at}"),
             None => window.to_string(),
         }
     }
@@ -140,6 +136,8 @@ pub struct Prefs {
     pub launch_at_login: bool,
     /// Consumed-percentage threshold at which a limit turns amber.
     pub warn_at: f32,
+    #[serde(default)]
+    pub disabled_integrations: HashSet<String>,
 }
 
 impl Default for Prefs {
@@ -149,6 +147,7 @@ impl Default for Prefs {
             only_show_active_limit: false,
             launch_at_login: crate::autostart::is_enabled(),
             warn_at: 80.0,
+            disabled_integrations: HashSet::new(),
         }
     }
 }
@@ -158,4 +157,18 @@ impl Default for Prefs {
 pub enum View {
     Usage,
     Prefs,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Prefs;
+
+    #[test]
+    fn old_preferences_default_to_all_integrations_enabled() {
+        let prefs: Prefs = serde_json::from_str(
+            r#"{"show_percentage_in_menu_bar":true,"only_show_active_limit":false,"launch_at_login":false,"warn_at":80}"#,
+        )
+        .unwrap();
+        assert!(prefs.disabled_integrations.is_empty());
+    }
 }
