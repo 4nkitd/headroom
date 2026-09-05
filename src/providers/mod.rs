@@ -26,14 +26,14 @@ pub struct SourceDescriptor {
 pub struct FetchOutcome {
     pub id: String,
     pub elapsed: Duration,
-    pub result: Result<Provider>,
+    pub result: Result<Vec<Provider>>,
 }
 
 pub trait UsageSource: Send + Sync {
     fn descriptor(&self) -> SourceDescriptor;
 
     /// Fetch current usage. Called off the main thread, so it may block.
-    fn fetch(&self) -> Result<Provider>;
+    fn fetch(&self) -> Result<Vec<Provider>>;
 }
 
 /// Every source the app knows about, in display order.
@@ -101,9 +101,9 @@ mod tests {
             }
         }
 
-        fn fetch(&self) -> anyhow::Result<Provider> {
+        fn fetch(&self) -> anyhow::Result<Vec<Provider>> {
             self.calls.fetch_add(1, Ordering::SeqCst);
-            Ok(Provider {
+            Ok(vec![Provider {
                 id: self.id.into(),
                 name: self.id.into(),
                 logo: "".into(),
@@ -114,7 +114,7 @@ mod tests {
                 console_url: "https://example.com".into(),
                 source_label: "Test HTTP API".into(),
                 limits: vec![Limit::new(Cadence::Daily, 100.0)],
-            })
+            }])
         }
     }
 

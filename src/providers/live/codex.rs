@@ -31,7 +31,7 @@ impl UsageSource for OpenAiCodex {
         }
     }
 
-    fn fetch(&self) -> Result<Provider> {
+    fn fetch(&self) -> Result<Vec<Provider>> {
         let mut credentials = credentials::codex_credentials()?;
         if credentials.expires_at > 0
             && now_millis() >= credentials.expires_at - 60_000
@@ -43,9 +43,9 @@ impl UsageSource for OpenAiCodex {
         let response = fetch_usage(&credentials)?;
         if response.status == 401 && !credentials.refresh_token.is_empty() {
             credentials = refresh_credentials(&credentials)?;
-            return parse_success(fetch_usage(&credentials)?);
+            return Ok(vec![parse_success(fetch_usage(&credentials)?)?]);
         }
-        parse_success(response)
+        Ok(vec![parse_success(response)?])
     }
 }
 

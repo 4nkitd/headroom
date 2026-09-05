@@ -27,10 +27,19 @@ impl UsageSource for OpenCodeGo {
         }
     }
 
-    fn fetch(&self) -> Result<Provider> {
-        let key = credentials::opencode_go_api_key()
-            .ok_or_else(|| anyhow!("OpenCode Go API key not configured"))?;
-        fetch_plan(&key)
+    fn fetch(&self) -> Result<Vec<Provider>> {
+        let accounts = credentials::opencode_go_accounts();
+        if accounts.is_empty() {
+            return Err(anyhow!("OpenCode Go API key not configured"));
+        }
+        let mut providers = Vec::new();
+        for account in accounts {
+            let mut provider = fetch_plan(&account.key)?;
+            provider.id = format!("opencode-go:{}", account.label).into();
+            provider.name = format!("OpenCode Go · {}", account.label).into();
+            providers.push(provider);
+        }
+        Ok(providers)
     }
 }
 

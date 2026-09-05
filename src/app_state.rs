@@ -249,14 +249,21 @@ impl AppState {
                     {
                         self.support_notice = Some("OpenCode Go key verified".into());
                     }
-                    if let Some(existing) = self
-                        .providers
-                        .iter_mut()
-                        .find(|existing| existing.id == provider.id)
-                    {
-                        *existing = provider;
-                    } else {
-                        self.providers.push(provider);
+                    for provider in provider {
+                        if let Some(existing) = self
+                            .providers
+                            .iter_mut()
+                            .find(|existing| existing.id == provider.id)
+                        {
+                            *existing = provider;
+                        } else {
+                            if provider.id.starts_with("antigravity:")
+                                && self.expanded.contains(&SharedString::from("antigravity"))
+                            {
+                                self.expanded.insert(provider.id.clone());
+                            }
+                            self.providers.push(provider);
+                        }
                     }
                 }
                 Err(error) => {
@@ -417,7 +424,18 @@ impl AppState {
                     .integrations
                     .iter()
                     .filter(|integration| self.integration_enabled(integration.id.as_ref()))
-                    .count();
+                    .map(|integration| {
+                        let count = self
+                            .providers
+                            .iter()
+                            .filter(|provider| {
+                                provider.id.as_ref() == integration.id.as_ref()
+                                    || provider.id.starts_with(&format!("{}:", integration.id))
+                            })
+                            .count();
+                        count.max(1)
+                    })
+                    .sum::<usize>();
                 let separators = provider_count.saturating_sub(1) as f32 * 0.5;
                 let details = self
                     .providers

@@ -18,7 +18,6 @@ struct PrefsViewData {
     prefs: Prefs,
     providers: Vec<Provider>,
     integrations: Vec<IntegrationStatus>,
-    opencode_go_status: String,
     update_status: crate::update::UpdateStatus,
     support_notice: Option<SharedString>,
 }
@@ -36,7 +35,6 @@ pub fn render(
         integrations: state.integrations.clone(),
         update_status: state.update_status.clone(),
         support_notice: state.support_notice.clone(),
-        opencode_go_status: credentials::opencode_go_key_status(),
     };
 
     div()
@@ -94,7 +92,6 @@ fn body(
         prefs,
         providers,
         integrations,
-        opencode_go_status,
         update_status,
         support_notice,
     } = data;
@@ -170,11 +167,15 @@ fn body(
         let entity = entity.clone();
         let api_key_input = api_key_input.clone();
         cx.listener(move |_, _, _, cx| {
-            let key = api_key_input.read(cx).value();
-            if key.trim().is_empty() {
+            let value = api_key_input.read(cx).value();
+            let (label, key) = value
+                .split_once('|')
+                .map(|(label, key)| (label.trim().to_string(), key.trim().to_string()))
+                .unwrap_or_else(|| ("OpenCode Go".into(), value.trim().to_string()));
+            if key.is_empty() {
                 return;
             }
-            if let Err(error) = credentials::save_opencode_go_api_key(&key) {
+            if let Err(error) = credentials::save_opencode_go_account(&label, &key) {
                 eprintln!("headroom: could not save OpenCode Go key: {error:#}");
                 return;
             }
@@ -189,11 +190,15 @@ fn body(
         let entity = entity.clone();
         let api_key_input = api_key_input.clone();
         cx.listener(move |_, _: &Activate, _, cx| {
-            let key = api_key_input.read(cx).value();
-            if key.trim().is_empty() {
+            let value = api_key_input.read(cx).value();
+            let (label, key) = value
+                .split_once('|')
+                .map(|(label, key)| (label.trim().to_string(), key.trim().to_string()))
+                .unwrap_or_else(|| ("OpenCode Go".into(), value.trim().to_string()));
+            if key.is_empty() {
                 return;
             }
-            if credentials::save_opencode_go_api_key(&key).is_err() {
+            if credentials::save_opencode_go_account(&label, &key).is_err() {
                 return;
             }
             api_key_input.update(cx, |input, cx| input.clear(cx));
@@ -354,14 +359,14 @@ fn body(
                             div()
                                 .text_size(px(13.))
                                 .text_color(theme::c(theme::TEXT))
-                                .child("OpenCode Go API key"),
+                                .child("OpenCode Go account"),
                         )
                         .child(
                             div()
                                 .text_size(px(11.))
                                 .mt(px(1.))
                                 .text_color(theme::c(theme::TEXT_MUTED))
-                                .child(opencode_go_status.clone()),
+                                .child("Use label|API key to add or update"),
                         ),
                 )
                 .child(
@@ -401,7 +406,10 @@ fn body(
                 .gap(px(9.))
                 .children(integrations.into_iter().map(|status| {
                     let enabled = !disabled_integrations.contains(status.id.as_ref());
-                    let provider = providers.iter().find(|provider| provider.id == status.id);
+                    let provider = providers.iter().find(|provider| {
+                        provider.id == status.id
+                            || provider.id.starts_with(&format!("{}:", status.id))
+                    });
                     let status_text: SharedString = if !enabled {
                         "Disabled".into()
                     } else if provider.is_some() {
@@ -468,7 +476,9 @@ fn body(
                     let credential_source = match status.id.as_ref() {
                         "claude-code" => credentials::claude_credentials_status().to_string(),
                         "openai-codex" => credentials::codex_credentials_status().to_string(),
-                        "opencode-go" => opencode_go_status.clone(),
+                        "opencode-go" => {
+                            format!("{} account(s)", credentials::opencode_go_accounts().len())
+                        }
                         "antigravity" => credentials::antigravity_credentials_status().to_string(),
                         _ => "Unknown source".into(),
                     };

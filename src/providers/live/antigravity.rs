@@ -1,6 +1,4 @@
 use std::collections::HashSet;
-use std::sync::{Mutex, OnceLock};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Result, anyhow, bail};
 use serde_json::Value;
@@ -12,14 +10,6 @@ use crate::model::{Cadence, Limit, Provider};
 use crate::providers::{SourceDescriptor, UsageSource};
 
 const TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
-
-static ACCESS_TOKEN: OnceLock<Mutex<Option<CachedAccessToken>>> = OnceLock::new();
-
-#[derive(Clone)]
-struct CachedAccessToken {
-    value: String,
-    expires_at: i64,
-}
 
 pub struct Antigravity;
 
@@ -37,15 +27,41 @@ impl UsageSource for Antigravity {
         }
     }
 
-    fn fetch(&self) -> Result<Provider> {
-        let token = access_token()?;
-        match fetch_with_token(&token) {
-            Err(error) if format!("{error:#}").contains("HTTP 401") => {
-                invalidate_access_token();
-                fetch_with_token(&access_token()?)
-            }
-            result => result,
+    fn fetch(&self) -> Result<Vec<Provider>> {
+        let accounts = credentials::antigravity_accounts();
+        if accounts.is_empty() {
+            bail!("Antigravity credentials not found");
         }
+        let mut providers = Vec::new();
+        let mut errors = Vec::new();
+        for account in accounts {
+            let token = match access_token(account.access_token.as_deref(), &account.refresh_token)
+            {
+                Ok(token) => token,
+                Err(error) => {
+                    errors.push(format!("{}: {error:#}", account.label));
+                    continue;
+                }
+            };
+            let result = match fetch_with_token(&token) {
+                Err(error) if format!("{error:#}").contains("HTTP 401") => {
+                    fetch_with_token(&refresh_access_token(&account.refresh_token)?)
+                }
+                result => result,
+            };
+            match result {
+                Ok(mut provider) => {
+                    provider.id = format!("antigravity:{}", account.label).into();
+                    provider.name = format!("Antigravity · {}", account.label).into();
+                    providers.push(provider);
+                }
+                Err(error) => errors.push(format!("{}: {error:#}", account.label)),
+            }
+        }
+        if providers.is_empty() {
+            bail!("Antigravity accounts unavailable: {}", errors.join("; "));
+        }
+        Ok(providers)
     }
 }
 
@@ -81,13 +97,6 @@ fn gemini_client_secret() -> String {
     ["GOC", "SPX-", "4uHgMPm-1o7Sk-geV6Cu5clXFsxl"].concat()
 }
 
-fn now_millis() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or(Duration::ZERO)
-        .as_millis() as i64
-}
-
 fn refresh_access_token(refresh_token: &str) -> Result<String> {
     let antigravity_id = antigravity_client_id();
     let antigravity_secret = antigravity_client_secret();
@@ -115,39 +124,17 @@ fn refresh_access_token(refresh_token: &str) -> Result<String> {
             && let Some(token) = value.get("access_token").and_then(Value::as_str)
         {
             let token = token.to_string();
-            let expires_in = value
-                .get("expires_in")
-                .and_then(Value::as_i64)
-                .unwrap_or(3600);
-            if let Ok(mut cache) = ACCESS_TOKEN.get_or_init(|| Mutex::new(None)).lock() {
-                *cache = Some(CachedAccessToken {
-                    value: token.clone(),
-                    expires_at: now_millis() + expires_in * 1000,
-                });
-            }
             return Ok(token);
         }
     }
     bail!("could not refresh Antigravity credentials")
 }
 
-fn access_token() -> Result<String> {
-    let cache = ACCESS_TOKEN.get_or_init(|| Mutex::new(None));
-    if let Ok(cache) = cache.lock()
-        && let Some(token) = cache.as_ref()
-        && now_millis() < token.expires_at - 60_000
-    {
-        return Ok(token.value.clone());
+fn access_token(existing: Option<&str>, refresh: &str) -> Result<String> {
+    if let Some(existing) = existing.filter(|token| !token.is_empty()) {
+        return Ok(existing.to_string());
     }
-    let refresh = credentials::antigravity_refresh_token()
-        .ok_or_else(|| anyhow!("Antigravity credentials not found"))?;
-    refresh_access_token(&refresh)
-}
-
-fn invalidate_access_token() {
-    if let Ok(mut cache) = ACCESS_TOKEN.get_or_init(|| Mutex::new(None)).lock() {
-        *cache = None;
-    }
+    refresh_access_token(refresh)
 }
 
 fn fetch_with_token(access_token: &str) -> Result<Provider> {

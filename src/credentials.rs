@@ -66,6 +66,68 @@ pub fn opencode_go_api_key() -> Option<String> {
         .filter(|key| !key.is_empty())
 }
 
+#[derive(Clone)]
+pub struct OpenCodeGoAccount {
+    pub label: String,
+    pub key: String,
+}
+
+fn opencode_go_accounts_path() -> PathBuf {
+    home_file(&[".config", "headroom", "opencode-go-accounts.json"])
+}
+
+pub fn opencode_go_accounts() -> Vec<OpenCodeGoAccount> {
+    let path = opencode_go_accounts_path();
+    if let Ok(raw) = fs::read_to_string(path)
+        && let Ok(value) = serde_json::from_str::<Value>(&raw)
+        && let Some(items) = value.as_array()
+    {
+        let accounts = items
+            .iter()
+            .filter_map(|item| {
+                Some(OpenCodeGoAccount {
+                    label: item.get("label")?.as_str()?.to_string(),
+                    key: item.get("key")?.as_str()?.to_string(),
+                })
+            })
+            .filter(|account| !account.key.trim().is_empty())
+            .collect::<Vec<_>>();
+        if !accounts.is_empty() {
+            return accounts;
+        }
+    }
+    opencode_go_api_key()
+        .map(|key| {
+            vec![OpenCodeGoAccount {
+                label: "OpenCode Go".into(),
+                key,
+            }]
+        })
+        .unwrap_or_default()
+}
+
+pub fn save_opencode_go_account(label: &str, key: &str) -> Result<()> {
+    let label = label.trim();
+    let key = key.trim();
+    if label.is_empty() || key.is_empty() {
+        bail!("OpenCode Go account label and key are required");
+    }
+    let mut accounts = opencode_go_accounts()
+        .into_iter()
+        .filter(|account| account.label != label)
+        .map(|account| serde_json::json!({"label": account.label, "key": account.key}))
+        .collect::<Vec<_>>();
+    accounts.push(serde_json::json!({"label": label, "key": key}));
+    let path = opencode_go_accounts_path();
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(&path, serde_json::to_vec_pretty(&accounts)?)?;
+    #[cfg(unix)]
+    fs::set_permissions(&path, std::os::unix::fs::PermissionsExt::from_mode(0o600))?;
+    Ok(())
+}
+
 pub fn opencode_go_key_status() -> String {
     if env::var("OPENCODE_GO_API_KEY")
         .ok()
@@ -83,76 +145,63 @@ pub fn opencode_go_key_status() -> String {
     }
 }
 
-pub fn save_opencode_go_api_key(key: &str) -> Result<()> {
-    let key = key.trim();
-    if key.is_empty() {
-        bail!("API key is empty");
-    }
-
-    #[cfg(target_os = "macos")]
-    if security_framework::passwords::set_generic_password(
-        "Headroom",
-        "opencode-go",
-        key.as_bytes(),
-    )
-    .is_ok()
-    {
-        return Ok(());
-    }
-
-    let path = home_file(&[".config", "headroom", "opencode-go.key"]);
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    fs::write(&path, format!("{key}\n"))?;
-    #[cfg(unix)]
-    fs::set_permissions(&path, std::os::unix::fs::PermissionsExt::from_mode(0o600))?;
-    Ok(())
+#[derive(Clone)]
+pub struct AntigravityAccount {
+    pub label: String,
+    pub refresh_token: String,
+    pub access_token: Option<String>,
 }
 
-fn refresh_token_from_store() -> Option<String> {
+pub fn antigravity_accounts() -> Vec<AntigravityAccount> {
+    let mut accounts = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    if let Some(value) = keychain_json("gemini", "antigravity") {
+        let token = value.get("token").unwrap_or(&value);
+        if let Some(refresh) = token.get("refresh_token").and_then(Value::as_str)
+            && seen.insert(refresh.to_string())
+        {
+            accounts.push(AntigravityAccount {
+                label: "Current Antigravity account".into(),
+                refresh_token: refresh.into(),
+                access_token: token
+                    .get("access_token")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+            });
+        }
+    }
     let path = home_file(&[".local", "share", "opencode", "antigravity-accounts.json"]);
-    let value: Value = serde_json::from_str(&fs::read_to_string(path).ok()?).ok()?;
-    let accounts = value.get("accounts")?.as_array()?;
-    let active = value
-        .get("activeIndex")
-        .and_then(Value::as_u64)
-        .unwrap_or(0) as usize;
+    if let Ok(raw) = fs::read_to_string(path)
+        && let Ok(value) = serde_json::from_str::<Value>(&raw)
+        && let Some(items) = value.get("accounts").and_then(Value::as_array)
+    {
+        for item in items {
+            let Some(refresh) = item.get("refreshToken").and_then(Value::as_str) else {
+                continue;
+            };
+            if !seen.insert(refresh.to_string()) {
+                continue;
+            }
+            let label = item
+                .get("email")
+                .and_then(Value::as_str)
+                .filter(|value| !value.is_empty())
+                .unwrap_or("Antigravity account")
+                .to_string();
+            accounts.push(AntigravityAccount {
+                label,
+                refresh_token: refresh.to_string(),
+                access_token: None,
+            });
+        }
+    }
     accounts
-        .get(active)
-        .or_else(|| accounts.first())
-        .and_then(|account| account.get("refreshToken"))
-        .and_then(Value::as_str)
-        .filter(|token| !token.trim().is_empty())
-        .map(str::to_string)
-}
-
-pub fn antigravity_refresh_token() -> Option<String> {
-    keychain_json("gemini", "antigravity")
-        .and_then(|value| value.get("token").cloned().or(Some(value)))
-        .and_then(|value| {
-            value
-                .get("refresh_token")
-                .and_then(Value::as_str)
-                .map(str::to_string)
-        })
-        .or_else(refresh_token_from_store)
-        .or_else(|| {
-            let path = env::var_os("GEMINI_OAUTH_CREDS")
-                .map(PathBuf::from)
-                .unwrap_or_else(|| home_file(&[".gemini", "oauth_creds.json"]));
-            let value: Value = serde_json::from_str(&fs::read_to_string(path).ok()?).ok()?;
-            value
-                .get("refresh_token")
-                .and_then(Value::as_str)
-                .map(str::to_string)
-        })
 }
 
 pub fn antigravity_credentials_status() -> &'static str {
     if keychain_json("gemini", "antigravity").is_some() {
         "Gemini Keychain"
-    } else if refresh_token_from_store().is_some() {
+    } else if !antigravity_accounts().is_empty() {
         "Antigravity credentials"
     } else {
         let path = env::var_os("GEMINI_OAUTH_CREDS")

@@ -33,8 +33,8 @@ impl UsageSource for ClaudeCode {
         }
     }
 
-    fn fetch(&self) -> Result<Provider> {
-        fetch_usage()
+    fn fetch(&self) -> Result<Vec<Provider>> {
+        Ok(vec![fetch_usage()?])
     }
 }
 

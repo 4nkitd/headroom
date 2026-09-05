@@ -38,16 +38,27 @@ pub fn render(
         .integrations
         .iter()
         .filter(|status| state.integration_enabled(status.id.as_ref()))
-        .map(|status| {
-            let provider = state
+        .flat_map(|status| {
+            let providers = state
                 .providers
                 .iter()
-                .find(|provider| provider.id == status.id)
-                .cloned();
-            let expanded = provider
-                .as_ref()
-                .is_some_and(|provider| state.is_expanded(&provider.id));
-            (status.clone(), provider, expanded)
+                .filter(|provider| {
+                    provider.id.as_ref() == status.id.as_ref()
+                        || provider.id.starts_with(&format!("{}:", status.id))
+                })
+                .cloned()
+                .collect::<Vec<_>>();
+            if providers.is_empty() {
+                vec![(status.clone(), None, false)]
+            } else {
+                providers
+                    .into_iter()
+                    .map(|provider| {
+                        let expanded = state.is_expanded(&provider.id);
+                        (status.clone(), Some(provider), expanded)
+                    })
+                    .collect()
+            }
         })
         .collect::<Vec<_>>();
 
