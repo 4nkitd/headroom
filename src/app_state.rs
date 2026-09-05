@@ -131,6 +131,7 @@ impl AppState {
             _refresh: None,
             _update: None,
         };
+        crate::widget_snapshot::export(&this);
         this._refresh = Some(this.spawn_refresh_loop(cx));
         this._update = Some(this.spawn_update_check(cx));
         this
@@ -289,6 +290,7 @@ impl AppState {
         if any_success {
             self.last_sync = Some(Local::now());
         }
+        crate::widget_snapshot::export(self);
         self.is_refreshing = false;
         if let Some(started) = self.refresh_started.take() {
             let duration = started.elapsed().as_millis().min(u64::MAX as u128) as u64;

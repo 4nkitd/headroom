@@ -51,8 +51,10 @@ impl UsageSource for Antigravity {
             };
             match result {
                 Ok(mut provider) => {
-                    provider.id = format!("antigravity:{}", account.label).into();
-                    provider.name = format!("Antigravity · {}", account.label).into();
+                    let account_id = account.label.clone();
+                    provider.id = format!("antigravity:{account_id}").into();
+                    let display_label = crate::model::truncate_account_label(&account.label);
+                    provider.name = format!("Antigravity · {display_label}").into();
                     providers.push(provider);
                 }
                 Err(error) => errors.push(format!("{}: {error:#}", account.label)),

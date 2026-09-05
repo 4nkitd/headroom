@@ -36,7 +36,11 @@ impl UsageSource for OpenCodeGo {
         for account in accounts {
             let mut provider = fetch_plan(&account.key)?;
             provider.id = format!("opencode-go:{}", account.label).into();
-            provider.name = format!("OpenCode Go · {}", account.label).into();
+            if account.label == "OpenCode Go" || account.label == "Default" {
+                provider.name = "OpenCode".into();
+            } else {
+                provider.name = format!("OpenCode · {}", account.label).into();
+            }
             providers.push(provider);
         }
         Ok(providers)

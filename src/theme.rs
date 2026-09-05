@@ -20,12 +20,14 @@ pub const TEXT_FAINT: u32 = 0xffffff59;
 pub const TEXT_ACTION: u32 = 0xffffff9e;
 /// Expanded-detail numerics.
 pub const TEXT_DETAIL: u32 = 0xffffffa6;
+#[allow(dead_code)]
 pub const TEXT_DIM: u32 = 0xffffff4d;
 
 pub const DIVIDER: u32 = 0xffffff17;
 pub const TRACK: u32 = 0xffffff1f;
 pub const ROW_HOVER: u32 = 0xffffff0f;
 pub const API_BADGE_BG: u32 = 0x30d1581f;
+#[allow(dead_code)]
 pub const API_BADGE_TEXT: u32 = 0x63df7fff;
 pub const OK_TEXT: u32 = 0x30d158ff;
 pub const WARN_TEXT: u32 = 0xffd60aff;
@@ -49,6 +51,7 @@ pub const UI_CANDIDATES: &[&str] = &[".SystemUIFont", "SF Pro Text", "Helvetica 
 
 /// Bar geometry.
 pub const BAR_HEIGHT: f32 = 7.0;
+#[allow(dead_code)]
 pub const BAR_WIDTH: f32 = 88.0;
 pub const SUB_BAR_HEIGHT: f32 = 5.0;
 /// Width of one stripe and the gap that follows it, matching the mock's

@@ -1,7 +1,8 @@
 //! The Preferences pane: global controls, integrations, and warning threshold.
 
 use gpui::{
-    Context, Entity, Focusable, IntoElement, SharedString, Styled, div, prelude::*, px, rgb,
+    Context, Entity, Focusable, FontWeight, IntoElement, SharedString, Styled, div, prelude::*, px,
+    rgb,
 };
 
 use crate::app_state::{AppState, IntegrationStatus};
@@ -132,6 +133,27 @@ fn body(
         cx.listener(move |_, _: &Activate, _, cx| {
             entity.update(cx, |state, cx| {
                 state.prefs.only_show_active_limit = !state.prefs.only_show_active_limit;
+                state.save_prefs();
+                cx.notify();
+            });
+        })
+    };
+
+    let toggle_notch_hud = {
+        let entity = entity.clone();
+        cx.listener(move |_, _, _, cx| {
+            entity.update(cx, |state, cx| {
+                state.prefs.enable_notch_hud = !state.prefs.enable_notch_hud;
+                state.save_prefs();
+                cx.notify();
+            });
+        })
+    };
+    let keyboard_toggle_notch_hud = {
+        let entity = entity.clone();
+        cx.listener(move |_, _: &Activate, _, cx| {
+            entity.update(cx, |state, cx| {
+                state.prefs.enable_notch_hud = !state.prefs.enable_notch_hud;
                 state.save_prefs();
                 cx.notify();
             });
@@ -326,6 +348,38 @@ fn body(
         )
         .child(
             div()
+                .id("pref-enable-notch-hud")
+                .tab_index(4)
+                .flex()
+                .items_center()
+                .justify_between()
+                .gap(px(12.))
+                .cursor_pointer()
+                .focus(|style| style.bg(theme::c(theme::ROW_HOVER)))
+                .on_click(toggle_notch_hud)
+                .on_action(keyboard_toggle_notch_hud)
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .child(
+                            div()
+                                .text_size(px(13.))
+                                .text_color(theme::c(theme::TEXT))
+                                .child("Enable macOS Notch HUD"),
+                        )
+                        .child(
+                            div()
+                                .text_size(px(11.))
+                                .mt(px(1.))
+                                .text_color(theme::c(theme::TEXT_MUTED))
+                                .child("Float Dynamic Island quota surface under camera notch"),
+                        ),
+                )
+                .child(toggle(prefs.enable_notch_hud)),
+        )
+        .child(
+            div()
                 .id("pref-launch-login")
                 .tab_index(5)
                 .flex()
@@ -392,13 +446,97 @@ fn body(
         )
         .child(divider().my(px(2.)))
         .child(section_label("Connected accounts"))
-        .child(
-            div()
-                .mt(px(-7.))
-                .text_size(px(10.))
-                .text_color(theme::c(theme::TEXT_MUTED))
-                .child("Usage is read directly from provider HTTP APIs."),
-        )
+        .child(div().flex().flex_col().gap(px(6.)).children({
+            let primary_account_id = prefs.primary_account_id.clone();
+            let ag_providers = providers
+                .iter()
+                .filter(|p| p.id.starts_with("antigravity:"))
+                .cloned()
+                .collect::<Vec<_>>();
+            let rows_data = ag_providers
+                .into_iter()
+                .enumerate()
+                .map(|(idx, provider)| {
+                    let provider_id = provider.id.to_string();
+                    let tag = crate::model::truncate_account_label(&provider_id);
+                    let is_primary = primary_account_id
+                        .as_ref()
+                        .map(|p_id| p_id == &provider_id)
+                        .unwrap_or(idx == 0);
+                    let entity = entity.clone();
+                    let p_id = provider_id.clone();
+                    let set_primary = cx.listener(move |_, _, _, cx| {
+                        entity.update(cx, |state, cx| {
+                            state.prefs.primary_account_id = Some(p_id.clone());
+                            state.save_prefs();
+                            cx.notify();
+                        });
+                    });
+                    (provider, provider_id, tag, is_primary, set_primary)
+                })
+                .collect::<Vec<_>>();
+
+            rows_data
+                .into_iter()
+                .map(|(provider, provider_id, tag, is_primary, set_primary)| {
+                    div()
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .p(px(8.))
+                        .rounded(px(6.))
+                        .bg(theme::c(theme::ROW_HOVER))
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap(px(8.))
+                                .child(badge(
+                                    provider.logo.clone(),
+                                    provider.badge.clone(),
+                                    provider.badge_bg,
+                                    provider.badge_fg,
+                                    18.0,
+                                    4.0,
+                                ))
+                                .child(
+                                    div()
+                                        .font_family(SharedString::from("IBM Plex Mono"))
+                                        .text_size(px(11.))
+                                        .text_color(theme::c(theme::TEXT))
+                                        .child(tag),
+                                )
+                                .when(is_primary, |d| {
+                                    d.child(
+                                        div()
+                                            .font_family(SharedString::from("IBM Plex Mono"))
+                                            .text_size(px(9.))
+                                            .font_weight(FontWeight::BOLD)
+                                            .px(px(4.))
+                                            .py(px(1.))
+                                            .rounded(px(3.))
+                                            .bg(theme::c(theme::API_BADGE_BG))
+                                            .text_color(theme::c(theme::OK_TEXT))
+                                            .child("PRIMARY"),
+                                    )
+                                }),
+                        )
+                        .child(
+                            div()
+                                .id(SharedString::from(format!("set-primary-{provider_id}")))
+                                .cursor_pointer()
+                                .px(px(8.))
+                                .py(px(3.))
+                                .rounded(px(4.))
+                                .bg(theme::c(theme::CONTROL_OFF))
+                                .text_size(px(11.))
+                                .text_color(theme::c(theme::TEXT_ACTION))
+                                .hover(|s| s.text_color(theme::c(0xffffffff)))
+                                .on_click(set_primary)
+                                .child(if is_primary { "Primary" } else { "Set primary" }),
+                        )
+                })
+        }))
         .child(
             div()
                 .flex()

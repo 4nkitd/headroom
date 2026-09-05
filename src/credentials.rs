@@ -152,6 +152,24 @@ pub struct AntigravityAccount {
     pub access_token: Option<String>,
 }
 
+fn active_google_account_email() -> Option<String> {
+    let path = home_file(&[".gemini", "google_accounts.json"]);
+    let raw = fs::read_to_string(path).ok()?;
+    let value: Value = serde_json::from_str(&raw).ok()?;
+    if let Some(active) = value.get("active").and_then(Value::as_str)
+        && !active.trim().is_empty()
+    {
+        return Some(active.trim().to_string());
+    }
+    if let Some(old) = value.get("old").and_then(Value::as_array)
+        && let Some(first) = old.first().and_then(Value::as_str)
+        && !first.trim().is_empty()
+    {
+        return Some(first.trim().to_string());
+    }
+    None
+}
+
 pub fn antigravity_accounts() -> Vec<AntigravityAccount> {
     let mut accounts = Vec::new();
     let mut seen = std::collections::HashSet::new();
@@ -160,8 +178,9 @@ pub fn antigravity_accounts() -> Vec<AntigravityAccount> {
         if let Some(refresh) = token.get("refresh_token").and_then(Value::as_str)
             && seen.insert(refresh.to_string())
         {
+            let label = active_google_account_email().unwrap_or_else(|| "Google Account".into());
             accounts.push(AntigravityAccount {
-                label: "Current Antigravity account".into(),
+                label,
                 refresh_token: refresh.into(),
                 access_token: token
                     .get("access_token")
@@ -182,12 +201,15 @@ pub fn antigravity_accounts() -> Vec<AntigravityAccount> {
             if !seen.insert(refresh.to_string()) {
                 continue;
             }
-            let label = item
+            let mut label = item
                 .get("email")
                 .and_then(Value::as_str)
                 .filter(|value| !value.is_empty())
-                .unwrap_or("Antigravity account")
+                .unwrap_or("Google Account")
                 .to_string();
+            if label == "Antigravity account" || label == "Google Account" {
+                label = active_google_account_email().unwrap_or_else(|| "Google Account".into());
+            }
             accounts.push(AntigravityAccount {
                 label,
                 refresh_token: refresh.to_string(),

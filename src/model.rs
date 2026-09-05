@@ -68,9 +68,9 @@ impl Limit {
             .unwrap_or_else(|| self.cadence.label())
     }
 
-    /// Fraction of the bucket already consumed — what the bar actually fills.
-    pub fn consumed(&self) -> f32 {
-        (100.0 - self.percent_left) / 100.0
+    /// Fraction of the bucket remaining — what the progress bar fills to match preview.html.
+    pub fn fraction_left(&self) -> f32 {
+        (self.percent_left / 100.0).clamp(0.0, 1.0)
     }
 }
 
@@ -108,6 +108,7 @@ impl Provider {
     }
 
     /// Compact subtitle line with the active window and reset time.
+    #[allow(dead_code)]
     pub fn subtitle(&self) -> String {
         let primary = self.primary();
         let window = primary
@@ -127,15 +128,39 @@ impl Provider {
     }
 }
 
+pub fn truncate_account_label(label: &str) -> String {
+    let raw = label.rsplit(':').next().unwrap_or(label);
+    if raw.contains('@') {
+        let name = raw.split('@').next().unwrap_or(raw);
+        name.chars().take(5).collect()
+    } else if raw == "openai-codex" {
+        "Codex".into()
+    } else if raw == "claude-code" {
+        "Claude".into()
+    } else if raw == "OpenCode Go" || raw == "opencode-go" {
+        "OpenCode".into()
+    } else {
+        raw.chars().take(8).collect()
+    }
+}
+
+fn default_true() -> bool {
+    true
+}
+
 /// User-adjustable settings, mirroring the Preferences pane.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Prefs {
     pub show_percentage_in_menu_bar: bool,
     /// Collapse weekly/monthly and surface only the headline limit.
     pub only_show_active_limit: bool,
+    #[serde(default = "default_true")]
+    pub enable_notch_hud: bool,
     pub launch_at_login: bool,
     /// Consumed-percentage threshold at which a limit turns amber.
     pub warn_at: f32,
+    #[serde(default)]
+    pub primary_account_id: Option<String>,
     #[serde(default)]
     pub disabled_integrations: HashSet<String>,
 }
@@ -145,8 +170,10 @@ impl Default for Prefs {
         Self {
             show_percentage_in_menu_bar: true,
             only_show_active_limit: false,
+            enable_notch_hud: true,
             launch_at_login: crate::autostart::is_enabled(),
             warn_at: 80.0,
+            primary_account_id: None,
             disabled_integrations: HashSet::new(),
         }
     }
@@ -161,7 +188,18 @@ pub enum View {
 
 #[cfg(test)]
 mod tests {
-    use super::Prefs;
+    use super::*;
+
+    #[test]
+    fn test_truncate_account_label() {
+        assert_eq!(truncate_account_label("4nkitd@gmail.com"), "4nkit");
+        assert_eq!(
+            truncate_account_label("antigravity:3anjuy@gmail.com"),
+            "3anju"
+        );
+        assert_eq!(truncate_account_label("opencode-go:Work"), "Work");
+        assert_eq!(truncate_account_label("opencode-go"), "OpenCode");
+    }
 
     #[test]
     fn old_preferences_default_to_all_integrations_enabled() {

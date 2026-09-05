@@ -6,11 +6,13 @@ mod autostart;
 mod credentials;
 mod diagnostics;
 mod model;
+mod notch_hud;
 mod providers;
 mod settings;
 mod theme;
 mod ui;
 mod update;
+mod widget_snapshot;
 
 #[cfg(target_os = "macos")]
 mod status_item;
@@ -135,6 +137,8 @@ fn main() {
 
         // No window at startup — the popover opens on demand from the menu bar.
         #[cfg(target_os = "macos")]
-        status_item::setup_status_bar_item(cx, state);
+        status_item::setup_status_bar_item(cx, state.clone());
+
+        notch_hud::setup_notch_hud(cx, state);
     });
 }

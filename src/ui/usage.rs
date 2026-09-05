@@ -34,11 +34,11 @@ pub fn render(
     };
     let refreshing = state.is_refreshing;
 
-    let rows = state
+    let groups = state
         .integrations
         .iter()
         .filter(|status| state.integration_enabled(status.id.as_ref()))
-        .flat_map(|status| {
+        .map(|status| {
             let providers = state
                 .providers
                 .iter()
@@ -48,33 +48,32 @@ pub fn render(
                 })
                 .cloned()
                 .collect::<Vec<_>>();
-            if providers.is_empty() {
-                vec![(status.clone(), None, false)]
-            } else {
-                providers
-                    .into_iter()
-                    .map(|provider| {
-                        let expanded = state.is_expanded(&provider.id);
-                        (status.clone(), Some(provider), expanded)
-                    })
-                    .collect()
-            }
+            (status.clone(), providers)
         })
         .collect::<Vec<_>>();
 
     div()
         .flex()
         .flex_col()
-        .child(header(synced_label, fonts))
+        .child(header(synced_label, fonts, entity, cx))
+        .child(divider().mx(px(14.)))
+        .child(
+            div()
+                .px(px(14.))
+                .pt(px(10.))
+                .pb(px(6.))
+                .child(section_label("Current Limits")),
+        )
         .child(
             div()
                 .flex()
                 .flex_col()
                 .children(
-                    rows.into_iter()
+                    groups
+                        .into_iter()
                         .enumerate()
-                        .map(|(i, (status, provider, expanded))| {
-                            let tab_index = 10 + i as isize;
+                        .map(|(i, (status, providers))| {
+                            let tab_index = 10 + i as isize * 5;
                             let row_options = RowOptions {
                                 tab_index,
                                 ..options
@@ -83,55 +82,102 @@ pub fn render(
                                 .flex()
                                 .flex_col()
                                 .when(i > 0, |d| d.child(divider().mx(px(14.))));
-                            if let Some(provider) = provider {
-                                row.child(provider_row(
-                                    provider,
+                            if providers.is_empty() {
+                                row.child(unavailable_row(
+                                    status, refreshing, tab_index, entity, cx,
+                                ))
+                            } else if status.id.as_ref() == "antigravity" {
+                                row.child(antigravity_grouped_card(
                                     status,
-                                    expanded,
+                                    providers,
                                     row_options,
                                     entity,
                                     fonts,
                                     cx,
                                 ))
                             } else {
-                                row.child(unavailable_row(
-                                    status, refreshing, tab_index, entity, cx,
-                                ))
+                                let mut provider_col = div().flex().flex_col();
+                                for (p_idx, provider) in providers.into_iter().enumerate() {
+                                    let expanded = entity.read(cx).is_expanded(&provider.id);
+                                    provider_col = provider_col.child(provider_row(
+                                        provider,
+                                        status.clone(),
+                                        expanded,
+                                        RowOptions {
+                                            tab_index: tab_index + p_idx as isize,
+                                            ..row_options
+                                        },
+                                        entity,
+                                        fonts,
+                                        cx,
+                                    ));
+                                }
+                                row.child(provider_col)
                             }
                         }),
                 ),
         )
-        .child(divider().mt(px(4.)))
-        .child(footer(entity, cx))
 }
 
-fn header(synced_label: String, fonts: &Fonts) -> impl IntoElement {
+fn header(
+    synced_label: String,
+    fonts: &Fonts,
+    entity: &Entity<AppState>,
+    cx: &mut Context<Panel>,
+) -> impl IntoElement {
+    let open_prefs = {
+        let entity = entity.clone();
+        cx.listener(move |_, _, _, cx| {
+            entity.update(cx, |state, cx| state.set_view(View::Prefs, cx));
+        })
+    };
+    let refresh = {
+        let entity = entity.clone();
+        cx.listener(move |_, _, _, cx| {
+            entity.update(cx, |state, cx| state.refresh_now(cx));
+        })
+    };
+
     div()
         .flex()
-        .items_baseline()
+        .items_center()
         .justify_between()
-        .pt(px(12.))
+        .pt(px(11.))
         .px(px(14.))
-        .pb(px(8.))
-        .child(section_label("Current limits"))
+        .pb(px(9.))
         .child(
             div()
-                .flex()
-                .items_baseline()
-                .gap(px(8.))
                 .font_family(fonts.mono.clone())
                 .text_size(px(11.))
                 .text_color(theme::c(theme::TEXT_FAINT))
+                .child(synced_label),
+        )
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap(px(8.))
+                .text_size(px(12.))
                 .child(
                     div()
-                        .px(px(5.))
-                        .py(px(2.))
-                        .rounded(px(4.))
-                        .bg(theme::c(theme::API_BADGE_BG))
-                        .text_color(theme::c(theme::API_BADGE_TEXT))
-                        .child("HTTP API"),
+                        .id("header-open-prefs")
+                        .tab_index(1)
+                        .cursor_pointer()
+                        .text_color(theme::c(theme::TEXT_ACTION))
+                        .hover(|s| s.text_color(theme::c(0xffffffff)))
+                        .on_click(open_prefs)
+                        .child("Preferences…"),
                 )
-                .child(synced_label),
+                .child(
+                    div()
+                        .id("header-refresh-now")
+                        .tab_index(2)
+                        .cursor_pointer()
+                        .text_color(theme::c(theme::TEXT_ACTION))
+                        .hover(|s| s.text_color(theme::c(0xffffffff)))
+                        .on_click(refresh)
+                        .child("Refresh now"),
+                ),
         )
 }
 
@@ -163,6 +209,15 @@ fn provider_row(
         })
     };
 
+    let account_pill_label = if provider.id.starts_with("opencode-go:") {
+        let raw = provider.id.as_ref();
+        raw.rsplit(':')
+            .next()
+            .filter(|l| *l != "OpenCode Go" && *l != "Default")
+    } else {
+        None
+    };
+
     div()
         .flex()
         .flex_col()
@@ -171,8 +226,8 @@ fn provider_row(
                 .id(SharedString::from(format!("row-{}", provider.id)))
                 .tab_index(options.tab_index)
                 .flex()
-                .items_center()
-                .gap(px(10.))
+                .flex_col()
+                .gap(px(6.))
                 .px(px(14.))
                 .py(px(9.))
                 .hover(|s| s.bg(theme::c(theme::ROW_HOVER)))
@@ -180,82 +235,82 @@ fn provider_row(
                 .cursor_pointer()
                 .on_click(toggle)
                 .on_action(keyboard_toggle)
-                .child(badge(
-                    provider.logo.clone(),
-                    provider.badge.clone(),
-                    provider.badge_bg,
-                    provider.badge_fg,
-                    22.0,
-                    6.0,
-                ))
                 .child(
                     div()
                         .flex()
-                        .flex_col()
-                        .flex_1()
-                        .min_w(px(0.))
-                        .overflow_hidden()
+                        .items_center()
+                        .justify_between()
                         .child(
                             div()
-                                .text_size(px(13.))
-                                .font_weight(FontWeight(590.0))
-                                .text_color(theme::c(theme::TEXT))
-                                .whitespace_nowrap()
-                                .child(provider.name.clone()),
+                                .flex()
+                                .items_center()
+                                .gap(px(10.))
+                                .child(badge(
+                                    provider.logo.clone(),
+                                    provider.badge.clone(),
+                                    provider.badge_bg,
+                                    provider.badge_fg,
+                                    22.0,
+                                    6.0,
+                                ))
+                                .child(
+                                    div()
+                                        .text_size(px(13.))
+                                        .font_weight(FontWeight(590.0))
+                                        .text_color(theme::c(theme::TEXT))
+                                        .child(provider.name.clone()),
+                                )
+                                .when_some(account_pill_label, |d, label| {
+                                    d.child(
+                                        div()
+                                            .font_family(fonts.mono.clone())
+                                            .text_size(px(10.))
+                                            .px(px(5.))
+                                            .py(px(1.))
+                                            .rounded(px(4.))
+                                            .bg(theme::c(theme::ROW_HOVER))
+                                            .text_color(theme::c(theme::TEXT_MUTED))
+                                            .child(label.to_string()),
+                                    )
+                                }),
                         )
                         .child(
                             div()
+                                .font_family(fonts.mono.clone())
                                 .text_size(px(11.))
-                                .mt(px(1.))
-                                .whitespace_nowrap()
-                                .text_color(match health {
-                                    Health::Ok => theme::c(theme::TEXT_MUTED),
-                                    _ => health.color(),
-                                })
-                                .child(provider.subtitle()),
+                                .font_weight(FontWeight(600.0))
+                                .text_color(health.color())
+                                .child(format!("{:.1}%", primary.percent_left)),
                         ),
                 )
                 .child(
                     div()
-                        .w(px(theme::BAR_WIDTH))
-                        .flex_shrink_0()
                         .flex()
-                        .child(striped_bar(
-                            primary.consumed(),
-                            health.color(),
-                            theme::BAR_HEIGHT,
-                        )),
+                        .items_center()
+                        .justify_between()
+                        .text_size(px(11.))
+                        .text_color(theme::c(theme::TEXT_MUTED))
+                        .child(primary.display_label().to_string())
+                        .child(
+                            div()
+                                .font_family(fonts.mono.clone())
+                                .text_color(theme::c(theme::TEXT_DETAIL))
+                                .child(match &primary.resets_at {
+                                    Some(at) => {
+                                        format!(
+                                            "{}% \u{00b7} {at}",
+                                            primary.percent_left.round() as i32
+                                        )
+                                    }
+                                    None => format!("{}%", primary.percent_left.round() as i32),
+                                }),
+                        ),
                 )
-                .child(
-                    div()
-                        .w(px(42.))
-                        .flex_shrink_0()
-                        .font_family(fonts.mono.clone())
-                        .text_size(px(12.))
-                        .font_weight(FontWeight(500.0))
-                        .text_color(health.color())
-                        .text_right()
-                        .child(format!("{}%", primary.percent_left.round() as i32)),
-                )
-                .child(
-                    div()
-                        .w(px(12.))
-                        .flex_shrink_0()
-                        .text_size(px(9.))
-                        .text_color(if status.error.is_some() {
-                            theme::c(theme::WARN_TEXT)
-                        } else {
-                            theme::c(theme::TEXT_DIM)
-                        })
-                        .text_center()
-                        .child(if status.error.is_some() {
-                            "!"
-                        } else if expanded {
-                            "\u{25be}"
-                        } else {
-                            "\u{25b8}"
-                        }),
-                ),
+                .child(striped_bar(
+                    primary.fraction_left(),
+                    health.color(),
+                    theme::BAR_HEIGHT,
+                )),
         )
         .when(expanded, |d| {
             d.child(detail(
@@ -401,7 +456,7 @@ fn secondary_row(limit: &Limit, warn_at: f32) -> impl IntoElement {
                 .child(limit.display_label().to_string()),
         )
         .child(div().flex_1().min_w(px(0.)).flex().child(striped_bar(
-            limit.consumed(),
+            limit.fraction_left(),
             health.color(),
             theme::SUB_BAR_HEIGHT,
         )))
@@ -418,6 +473,145 @@ fn secondary_row(limit: &Limit, warn_at: f32) -> impl IntoElement {
                     None => format!("{}%", limit.percent_left.round() as i32),
                 }),
         )
+}
+
+fn antigravity_grouped_card(
+    status: IntegrationStatus,
+    providers: Vec<Provider>,
+    options: RowOptions,
+    entity: &Entity<AppState>,
+    fonts: &Fonts,
+    cx: &mut Context<Panel>,
+) -> impl IntoElement {
+    let primary_account_id = entity.read(cx).prefs.primary_account_id.clone();
+    let mut card = div()
+        .flex()
+        .flex_col()
+        .gap(px(8.))
+        .px(px(14.))
+        .py(px(9.))
+        .hover(|s| s.bg(theme::c(theme::ROW_HOVER)))
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .justify_between()
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(10.))
+                        .child(badge(
+                            status.logo.clone(),
+                            status.badge.clone(),
+                            status.badge_bg,
+                            status.badge_fg,
+                            22.0,
+                            6.0,
+                        ))
+                        .child(
+                            div()
+                                .text_size(px(13.))
+                                .font_weight(FontWeight(590.0))
+                                .text_color(theme::c(theme::TEXT))
+                                .child("Antigravity"),
+                        ),
+                )
+                .child(
+                    div()
+                        .font_family(fonts.mono.clone())
+                        .text_size(px(11.))
+                        .text_color(theme::c(theme::TEXT_FAINT))
+                        .child("Google Code Assist API"),
+                ),
+        );
+
+    for (idx, provider) in providers.into_iter().enumerate() {
+        let primary = provider.primary();
+        let health = Health::from_percent_left(primary.percent_left, options.warn_at);
+        let account_tag = crate::model::truncate_account_label(provider.id.as_ref());
+        let is_primary = primary_account_id
+            .as_ref()
+            .map(|p_id| p_id == provider.id.as_ref())
+            .unwrap_or(idx == 0);
+
+        let subrow = div()
+            .flex()
+            .flex_col()
+            .gap(px(4.))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(4.))
+                            .child(
+                                div()
+                                    .font_family(fonts.mono.clone())
+                                    .text_size(px(10.))
+                                    .px(px(5.))
+                                    .py(px(1.))
+                                    .rounded(px(4.))
+                                    .bg(theme::c(theme::ROW_HOVER))
+                                    .text_color(theme::c(theme::TEXT_MUTED))
+                                    .child(account_tag),
+                            )
+                            .when(is_primary, |d| {
+                                d.child(
+                                    div()
+                                        .font_family(fonts.mono.clone())
+                                        .text_size(px(9.))
+                                        .font_weight(FontWeight::BOLD)
+                                        .px(px(4.))
+                                        .py(px(1.))
+                                        .rounded(px(3.))
+                                        .bg(theme::c(theme::API_BADGE_BG))
+                                        .text_color(theme::c(theme::OK_TEXT))
+                                        .child("PRIMARY"),
+                                )
+                            }),
+                    )
+                    .child(
+                        div()
+                            .font_family(fonts.mono.clone())
+                            .text_size(px(11.))
+                            .font_weight(FontWeight(600.0))
+                            .text_color(health.color())
+                            .child(format!("{:.1}%", primary.percent_left)),
+                    ),
+            )
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .text_size(px(11.))
+                    .text_color(theme::c(theme::TEXT_MUTED))
+                    .child("Gemini 5h session")
+                    .child(
+                        div()
+                            .font_family(fonts.mono.clone())
+                            .text_color(theme::c(theme::TEXT_DETAIL))
+                            .child(match &primary.resets_at {
+                                Some(at) => format!("{:.1}% \u{00b7} {at}", primary.percent_left),
+                                None => format!("{:.1}%", primary.percent_left),
+                            }),
+                    ),
+            )
+            .child(striped_bar(
+                primary.fraction_left(),
+                health.color(),
+                theme::BAR_HEIGHT,
+            ));
+
+        card = card.child(subrow);
+    }
+
+    card
 }
 
 fn unavailable_row(
@@ -510,69 +704,5 @@ fn unavailable_row(
                 .text_size(px(10.))
                 .text_color(theme::c(theme::TEXT_LABEL))
                 .child(if needs_setup { "SET UP" } else { "RETRY" }),
-        )
-}
-
-fn footer(entity: &Entity<AppState>, cx: &mut Context<Panel>) -> impl IntoElement {
-    let refreshing = entity.read(cx).is_refreshing;
-    let open_prefs = {
-        let entity = entity.clone();
-        cx.listener(move |_, _, _, cx| {
-            entity.update(cx, |state, cx| state.set_view(View::Prefs, cx));
-        })
-    };
-    let refresh = {
-        let entity = entity.clone();
-        cx.listener(move |_, _, _, cx| {
-            entity.update(cx, |state, cx| state.refresh_now(cx));
-        })
-    };
-    let open_prefs_keyboard = {
-        let entity = entity.clone();
-        cx.listener(move |_, _: &Activate, _, cx| {
-            entity.update(cx, |state, cx| state.set_view(View::Prefs, cx));
-        })
-    };
-    let refresh_keyboard = {
-        let entity = entity.clone();
-        cx.listener(move |_, _: &Activate, _, cx| {
-            entity.update(cx, |state, cx| state.refresh_now(cx));
-        })
-    };
-
-    div()
-        .flex()
-        .items_center()
-        .justify_between()
-        .pt(px(8.))
-        .px(px(14.))
-        .pb(px(10.))
-        .text_size(px(12.))
-        .text_color(theme::c(theme::TEXT_ACTION))
-        .child(
-            div()
-                .id("open-prefs")
-                .tab_index(200)
-                .cursor_pointer()
-                .hover(|s| s.text_color(theme::c(0xffffffff)))
-                .focus(|s| s.text_color(theme::c(0xffffffff)))
-                .on_click(open_prefs)
-                .on_action(open_prefs_keyboard)
-                .child("Preferences\u{2026}"),
-        )
-        .child(
-            div()
-                .id("refresh-now")
-                .tab_index(201)
-                .cursor_pointer()
-                .hover(|s| s.text_color(theme::c(0xffffffff)))
-                .focus(|s| s.text_color(theme::c(0xffffffff)))
-                .on_click(refresh)
-                .on_action(refresh_keyboard)
-                .child(if refreshing {
-                    "Updating…".to_string()
-                } else {
-                    "Refresh now \u{2318}R".to_string()
-                }),
         )
 }

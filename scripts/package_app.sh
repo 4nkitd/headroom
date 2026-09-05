@@ -12,10 +12,18 @@ if [[ ${1:-} != "--skip-build" ]]; then
 fi
 
 rm -rf "$APP"
-mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$APP/Contents/PlugIns"
 install -m 755 "$ROOT/target/release/headroom" "$APP/Contents/MacOS/headroom"
 sed -e "s/__VERSION__/$VERSION/g" -e "s/__BUILD__/$BUILD/g" \
   "$ROOT/scripts/Info.plist.in" > "$APP/Contents/Info.plist"
+
+# WidgetExtension target compilation & embedding
+PLUGINS_DIR="$APP/Contents/PlugIns/HeadroomWidget.appex"
+mkdir -p "$PLUGINS_DIR/Contents/MacOS"
+swiftc -parse-as-library -target arm64-apple-macosx14.0 -module-cache-path /tmp/swift_cache \
+  "$ROOT/widget/HeadroomWidget.swift" \
+  -o "$PLUGINS_DIR/Contents/MacOS/HeadroomWidget"
+cp "$ROOT/widget/Info.plist" "$PLUGINS_DIR/Contents/Info.plist"
 
 if [[ -f "$ROOT/assets/AppIcon-1024.png" ]]; then
   ICONSET="$ROOT/dist/AppIcon.iconset"
@@ -33,10 +41,12 @@ if [[ -f "$ROOT/assets/AppIcon-1024.png" ]]; then
 fi
 
 if [[ "$IDENTITY" == "-" ]]; then
-  codesign --force --deep --sign - "$APP"
+  codesign --force --deep --sign - --entitlements "$ROOT/scripts/widget-entitlements.plist" "$PLUGINS_DIR"
+  codesign --force --deep --sign - --entitlements "$ROOT/scripts/entitlements.plist" "$APP"
   echo "Packaged with ad-hoc signing; set CODESIGN_IDENTITY for distribution."
 else
-  codesign --force --deep --options runtime --timestamp --sign "$IDENTITY" "$APP"
+  codesign --force --deep --options runtime --timestamp --sign "$IDENTITY" --entitlements "$ROOT/scripts/widget-entitlements.plist" "$PLUGINS_DIR"
+  codesign --force --deep --options runtime --timestamp --sign "$IDENTITY" --entitlements "$ROOT/scripts/entitlements.plist" "$APP"
 fi
 
 codesign --verify --deep --strict --verbose=2 "$APP"
