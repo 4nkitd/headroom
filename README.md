@@ -34,7 +34,7 @@ It runs as a pure status-bar accessory (no Dock icon), opens on-demand when clic
   - **OpenAI Codex**: ChatGPT subscription session, weekly, and model-specific limits from the Codex usage API.
   - **Claude Code**: Live session (5-hour window) and weekly quotas from Anthropic HTTP rate-limit headers.
   - **OpenCode Go**: Rolling (5h), weekly (7d), and monthly (30d) plan usage via `https://opencode.ai/zen/go/v1/usage`.
-  - **Google Antigravity**: Quotas and reset countdowns fetched directly from Google Cloud Code Assist (`loadCodeAssist` + `retrieveUserQuota`).
+  - **Google Antigravity**: AGY `/usage`-compatible grouped quotas and reset countdowns fetched directly from Google Cloud Code Assist (`loadCodeAssist` + `retrieveUserQuotaSummary`).
 - 🔐 **Secure Credentials**: Uses native Security.framework Keychain access and provider credential stores; token values never appear in diagnostics.
 - 🎛️ **Per-Integration Controls**: Disable providers you no longer use; disabled integrations are hidden and never queried until re-enabled.
 - 🎨 **Native Brand UI**: Official provider marks, compact dark-mode layout, keyboard navigation, and accessible status labels.

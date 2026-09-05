@@ -6,6 +6,7 @@ use anyhow::{Result, anyhow, bail};
 use serde_json::Value;
 
 use super::http::{json, json_number, request, url_encode};
+use super::parse_reset_time;
 use crate::credentials;
 use crate::model::{Cadence, Limit, Provider};
 use crate::providers::{SourceDescriptor, UsageSource};
@@ -196,6 +197,14 @@ fn fetch_with_token(access_token: &str) -> Result<Provider> {
         } else {
             serde_json::json!({ "project": project })
         };
+        if let Ok(summary) = json(
+            &format!("{endpoint}:retrieveUserQuotaSummary"),
+            &headers,
+            quota_body.clone(),
+        ) && let Ok(provider) = parse_summary_provider(&load, &summary)
+        {
+            return Ok(provider);
+        }
         let quota = match json(
             &format!("{endpoint}:retrieveUserQuota"),
             &headers,
@@ -339,11 +348,73 @@ fn parse_provider(load: &Value, quota: &Value) -> Result<Provider> {
     })
 }
 
+fn parse_summary_provider(load: &Value, summary: &Value) -> Result<Provider> {
+    let groups = summary
+        .get("groups")
+        .and_then(Value::as_array)
+        .ok_or_else(|| anyhow!("Antigravity quota summary has no groups"))?;
+    let mut limits = Vec::new();
+    for group in groups {
+        let group_name = group
+            .get("displayName")
+            .and_then(Value::as_str)
+            .unwrap_or("Models");
+        for bucket in group
+            .get("buckets")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            let Some(remaining) = json_number(bucket.get("remainingFraction")) else {
+                continue;
+            };
+            let cadence = match bucket.get("window").and_then(Value::as_str) {
+                Some("5h" | "5h0m0s" | "18000s") => Cadence::Session,
+                Some("weekly" | "7d" | "604800s") => Cadence::Weekly,
+                _ => continue,
+            };
+            let reset =
+                parse_reset_time(bucket.get("resetTime").or_else(|| bucket.get("reset_time")));
+            let group_label = if group_name.contains("Gemini") {
+                "Gemini"
+            } else {
+                "Claude/GPT"
+            };
+            limits.push(
+                Limit::new(cadence, (remaining.clamp(0.0, 1.0) * 100.0) as f32)
+                    .label(format!("{group_label} {}", cadence.label()))
+                    .resets_at(reset.unwrap_or_else(|| "unknown".into())),
+            );
+        }
+    }
+    if limits.is_empty() {
+        bail!("Antigravity quota summary has no usable buckets");
+    }
+    limits.sort_by_key(|limit| (limit.cadence, !limit.display_label().starts_with("Gemini")));
+    let tier = load
+        .pointer("/currentTier/name")
+        .and_then(Value::as_str)
+        .or_else(|| load.pointer("/planInfo/planType").and_then(Value::as_str))
+        .unwrap_or("Antigravity");
+    Ok(Provider {
+        id: "antigravity".into(),
+        name: "Antigravity".into(),
+        logo: "providers/antigravity.png".into(),
+        badge: "G".into(),
+        badge_bg: 0x4285f4,
+        badge_fg: 0xffffff,
+        plan: tier.to_string().into(),
+        console_url: "https://aistudio.google.com".into(),
+        source_label: "Google Cloud Code Assist quota summary API".into(),
+        limits,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::Value;
 
-    use super::{model_label, parse_provider};
+    use super::{model_label, parse_provider, parse_summary_provider};
 
     #[test]
     fn parses_quota_fixture() {
@@ -360,5 +431,19 @@ mod tests {
     fn formats_model_ids() {
         assert_eq!(model_label("gemini-3.7-flash"), "Gemini 3.7 Flash");
         assert_eq!(model_label("claude_sonnet_4"), "Claude Sonnet 4");
+    }
+
+    #[test]
+    fn parses_summary_buckets() {
+        let load = serde_json::json!({"currentTier": {"name": "Antigravity"}});
+        let summary = serde_json::json!({
+            "groups": [{"displayName": "Gemini Models", "buckets": [
+                {"window": "weekly", "remainingFraction": 0.78, "resetTime": "2026-09-12T06:46:22Z"},
+                {"window": "5h", "remainingFraction": 0.92, "resetTime": "2026-09-05T11:46:22Z"}
+            ]}]
+        });
+        let provider = parse_summary_provider(&load, &summary).unwrap();
+        assert_eq!(provider.primary().percent_left, 92.0);
+        assert_eq!(provider.secondary()[0].percent_left, 78.0);
     }
 }
